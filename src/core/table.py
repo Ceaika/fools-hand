@@ -29,10 +29,10 @@ class Table:
         return [p.defence for p in self.pairs if p.defence is not None]
 
     def all_cards(self) -> List[Card]:
-        out: List[Card] = []
+        out = []
         for p in self.pairs:
             out.append(p.attack)
-            if p.defence is not None:
+            if p.defence:
                 out.append(p.defence)
         return out
 
@@ -45,7 +45,7 @@ class Table:
     def add_defence(self, attack_index: int, card: Card) -> None:
         if attack_index < 0 or attack_index >= len(self.pairs):
             raise IndexError("Invalid attack index")
-        if self.pairs[attack_index].defence is not None:
+        if self.pairs[attack_index].is_defended():
             raise ValueError("That attack is already defended")
         self.pairs[attack_index].defence = card
 
@@ -59,10 +59,12 @@ class Table:
         return self.first_undefended_index() is None
 
     def __str__(self) -> str:
-        parts: List[str] = []
+        if not self.pairs:
+            return "(empty)"
+        parts = []
         for i, p in enumerate(self.pairs):
-            if p.defence is None:
-                parts.append(f"{i}: {p.attack} / _")
+            if p.defence:
+                parts.append(f"{p.attack} / {p.defence}")
             else:
-                parts.append(f"{i}: {p.attack} / {p.defence}")
-        return " | ".join(parts) if parts else "(empty)"
+                parts.append(f"{p.attack} / _")
+        return " | ".join(parts)

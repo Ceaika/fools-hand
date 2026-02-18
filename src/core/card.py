@@ -5,49 +5,52 @@ from enum import Enum
 from typing import Iterable
 
 
-class Suit(str, Enum):
-    CLUBS = "♣"
+class Suit(Enum):
+    CLUBS    = "♣"
     DIAMONDS = "♦"
-    HEARTS = "♥"
-    SPADES = "♠"
+    HEARTS   = "♥"
+    SPADES   = "♠"
+
+    def __str__(self) -> str:
+        return self.value
 
 
-# 32-card Durak deck (6..A)
-RANKS_32: tuple[str, ...] = ("6", "7", "8", "9", "10", "J", "Q", "K", "A")
-RANK_VALUE = {r: i for i, r in enumerate(RANKS_32)}
+# 32-card Durak deck: 6 through Ace
+RANKS_32 = ["6", "7", "8", "9", "10", "J", "Q", "K", "A"]
+_RANK_VALUE = {r: i for i, r in enumerate(RANKS_32)}
+
+
+def ranks_on_cards(cards: Iterable[Card]) -> set[str]:
+    """Return the set of rank strings present in a collection of cards."""
+    return {c.rank for c in cards}
 
 
 @dataclass(frozen=True, slots=True)
 class Card:
     suit: Suit
-    rank: str
+    rank: str  # one of RANKS_32
 
-    def __post_init__(self) -> None:
-        if self.rank not in RANK_VALUE:
-            raise ValueError(f"Invalid rank for 32-card deck: {self.rank}")
-
-    def __str__(self) -> str:
-        return f"{self.rank}{self.suit.value}"
-
-    @property
     def rank_value(self) -> int:
-        return RANK_VALUE[self.rank]
+        return _RANK_VALUE[self.rank]
+
+    def is_trump(self, trump: Suit) -> bool:
+        return self.suit == trump
 
     def can_beat(self, other: Card, trump: Suit) -> bool:
-        """
-        Durak beating logic:
-        - Same suit: higher rank beats lower rank
-        - Trump beats any non-trump
-        - Non-trump cannot beat trump
-        """
+        """Return True if self beats other under Durak rules."""
         if self.suit == other.suit:
-            return self.rank_value > other.rank_value
-
-        # different suits
-        if self.suit == trump and other.suit != trump:
+            return self.rank_value() > other.rank_value()
+        if self.is_trump(trump) and not other.is_trump(trump):
             return True
         return False
 
+    def sort_key(self, trump: Suit) -> tuple:
+        """Non-trumps first (by suit index then rank), trumps last."""
+        is_trump = 1 if self.suit == trump else 0
+        return (is_trump, list(Suit).index(self.suit), self.rank_value())
 
-def ranks_on_cards(cards: Iterable[Card]) -> set[str]:
-    return {c.rank for c in cards}
+    def __str__(self) -> str:
+        return f"{self.rank}{self.suit}"
+
+    def __repr__(self) -> str:
+        return self.__str__()

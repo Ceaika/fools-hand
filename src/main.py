@@ -2,9 +2,9 @@ from src.core.game import Game
 
 
 def main() -> None:
-    game = Game(seed=1)  # deterministic shuffle for early testing
+    game = Game()
     game.setup(num_players=2)
-    game.play_interactive_round_demo()
+    game.play()
 
 
 if __name__ == "__main__":

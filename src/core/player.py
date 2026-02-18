@@ -3,16 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List
 
-from .card import Card
+from .card import Card, Suit
 
 
 @dataclass(slots=True)
 class Player:
     name: str
     hand: List[Card] = field(default_factory=list)
-    
-    def sort_hand(self, trump) -> None:
-        self.hand.sort(key=lambda c: (c.suit == trump, c.rank_value))
 
     def draw_to_six(self, deck) -> None:
         while len(self.hand) < 6 and deck.remaining() > 0:
@@ -21,10 +18,8 @@ class Player:
     def remove_card(self, card: Card) -> None:
         self.hand.remove(card)
 
+    def sort_hand(self, trump: Suit) -> None:
+        self.hand.sort(key=lambda c: c.sort_key(trump))
+
     def __str__(self) -> str:
         return f"{self.name}({len(self.hand)}): " + " ".join(str(c) for c in self.hand)
-    def hand_with_indexes(self) -> str:
-        return "  ".join(f"[{i}] {c}" for i, c in enumerate(self.hand))
-
-    def has_any_defence(self, attack_card, validator) -> bool:
-        return any(validator.can_defend(attack_card, c) for c in self.hand)

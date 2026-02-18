@@ -3,234 +3,304 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+from .card import Card, Suit
 from .deck import Deck
-from .move_validator import MoveValidator
 from .player import Player
 from .table import Table
 
 
-@dataclass(slots=True)
+# ── simple AI helpers ────────────────────────────────────────────────────────
+
+def _ai_choose_attack(player: Player, table: Table, trump: Suit) -> Optional[Card]:
+    """Pick the weakest valid attack card. Prefer non-trumps."""
+    valid: List[Card] = []
+    on_table = table.ranks_on_table()
+
+    for card in player.hand:
+        if table.all_cards() == [] or card.rank in on_table:
+            valid.append(card)
+
+    if not valid:
+        return None
+
+    non_trump = [c for c in valid if not c.is_trump(trump)]
+    pool = non_trump if non_trump else valid
+    return min(pool, key=lambda c: c.rank_value())
+
+
+def _ai_should_stop_attacking(attacker: Player, table: Table, defender: Player, trump: Suit) -> bool:
+    """
+    Stop attacking when:
+    - No more valid pile-on cards exist, OR
+    - Defender has few cards left (don't over-commit), OR
+    - We've already attacked with 6 cards.
+    """
+    on_table = table.ranks_on_table()
+    can_add = [c for c in attacker.hand if c.rank in on_table]
+
+    if not can_add:
+        return True
+    if table.all_defended() and len(can_add) > 0 and len(defender.hand) == 0:
+        return True
+    if len(table.attacks()) >= 6:
+        return True
+    # Hard stop heuristic: don't pile on if defender is nearly empty
+    if len(defender.hand) <= len(table.attacks()):
+        return True
+    return False
+
+
+def _ai_choose_defence(defender: Player, attack_card: Card, trump: Suit) -> Optional[Card]:
+    """
+    Pick the cheapest card that beats the attack.
+    Prefer same-suit over trump.
+    """
+    same_suit = [c for c in defender.hand
+                 if c.suit == attack_card.suit and c.can_beat(attack_card, trump)]
+    trump_cards = [c for c in defender.hand
+                   if c.is_trump(trump) and not attack_card.is_trump(trump)
+                   and c.can_beat(attack_card, trump)]
+
+    if same_suit:
+        return min(same_suit, key=lambda c: c.rank_value())
+    if trump_cards:
+        return min(trump_cards, key=lambda c: c.rank_value())
+    return None
+
+
+# ── Game ─────────────────────────────────────────────────────────────────────
+
+@dataclass
 class Game:
     seed: Optional[int] = None
-
-    deck: Deck = field(init=False)
-    validator: MoveValidator = field(init=False)
-    table: Table = field(init=False)
-    players: List[Player] = field(init=False)
-
-    attacker_idx: int = field(init=False)
-    defender_idx: int = field(init=False)
-
-    def __post_init__(self) -> None:
-        self.deck = Deck.new_shuffled(seed=self.seed)
-        self.validator = MoveValidator(trump=self.deck.trump)
-        self.table = Table()
-        self.players = []
-        self.attacker_idx = 0
-        self.defender_idx = 1
+    players: List[Player] = field(default_factory=list)
+    deck: Optional[Deck] = None
+    table: Table = field(default_factory=Table)
+    attacker_idx: int = 0
+    defender_idx: int = 1
 
     def setup(self, num_players: int = 2) -> None:
-        if num_players < 2:
-            raise ValueError("Durak needs at least 2 players")
-
-        self.players = [Player(name=f"P{i+1}") for i in range(num_players)]
-
-        # initial deal: 6 each
-        for _ in range(6):
+        assert 2 <= num_players <= 6
+        self.deck = Deck.new_shuffled(seed=self.seed)
+        self.players = [Player(name=f"Bot {i}" if i > 0 else "You")
+                        for i in range(num_players)]
+        # deal 6 cards each, 2 at a time
+        for _ in range(3):
             for p in self.players:
-                p.hand.append(self.deck.draw())
-                
+                for _ in range(2):
+                    if self.deck.remaining() > 0:
+                        p.hand.append(self.deck.draw())
+        # sort hands trump-last
         for p in self.players:
             p.sort_hand(self.deck.trump)
 
-
         self.attacker_idx = 0
         self.defender_idx = 1
+        print(f"\nTrump suit: {self.deck.trump}")
+        print(f"Trump card: {self.deck.peek_bottom()}")
 
-    def attacker(self) -> Player:
-        return self.players[self.attacker_idx]
+    # ── round helpers ────────────────────────────────────────────────────────
 
-    def defender(self) -> Player:
-        return self.players[self.defender_idx]
+    def _draw_up(self) -> None:
+        """All players draw back up to 6, attacker first then others."""
+        order = (
+            [self.attacker_idx]
+            + [i for i in range(len(self.players))
+               if i not in (self.attacker_idx, self.defender_idx)]
+            + [self.defender_idx]
+        )
+        for idx in order:
+            self.players[idx].draw_to_six(self.deck)
+            self.players[idx].sort_hand(self.deck.trump)
 
-    def _rotate_roles_after_successful_defence(self) -> None:
-        # In basic 2-player: swap
-        self.attacker_idx, self.defender_idx = self.defender_idx, self.attacker_idx
+    def _advance_roles(self, defender_took: bool) -> None:
+        n = len(self.players)
+        if defender_took:
+            # Defender picks up; skip them — attacker stays, next attacker is after defender
+            self.attacker_idx = (self.defender_idx + 1) % n
+        else:
+            # Successful defence: defender becomes next attacker
+            self.attacker_idx = self.defender_idx
+        self.defender_idx = (self.attacker_idx + 1) % n
 
-    def play_single_attack_demo(self) -> None:
-        a = self.attacker()
-        d = self.defender()
+    def _active_players(self) -> List[int]:
+        """Indices of players still holding cards."""
+        return [i for i, p in enumerate(self.players) if len(p.hand) > 0]
 
-        print("=== Fool's Hand Prototype ===")
-        print(f"Trump suit: {self.deck.trump.value}")
-        print()
+    def _check_game_over(self) -> Optional[int]:
+        """Return index of the loser if only one player has cards, else None."""
+        active = self._active_players()
+        if len(active) == 1:
+            return active[0]
+        return None
 
-        # First attack
-        attack_card = sorted(a.hand, key=lambda c: (c.suit == self.deck.trump, c.rank_value))[0]
-        a.remove_card(attack_card)
-        self.table.add_attack(attack_card)
+    # ── interactive helpers ──────────────────────────────────────────────────
 
-        print(f"{a.name} attacks with {attack_card}")
-
+    def _pick_card_by_index(self, player: Player, prompt: str) -> Optional[Card]:
+        """Show player's hand and let them pick a card by index, or 0 to pass."""
+        print(f"\n  {player}")
+        numbered = list(enumerate(player.hand, start=1))
+        for idx, card in numbered:
+            print(f"    [{idx}] {card}")
+        print(f"    [0] Pass / stop")
         while True:
-            # Defender must respond to each undefended attack
-            idx = self.table.first_undefended_index()
-            if idx is None:
-                break  # all defended
-
-            attack = self.table.pairs[idx].attack
-
-            beating_options = [c for c in d.hand if self.validator.can_defend(attack, c)]
-            if not beating_options:
-                print(f"{d.name} cannot defend {attack} and picks up.")
-                d.hand.extend(self.table.all_cards())
-                self.table.clear()
-
-                a.draw_to_six(self.deck)
-                d.draw_to_six(self.deck)
-                return
-
-            defence = sorted(beating_options, key=lambda c: (c.suit == self.deck.trump, c.rank_value))[0]
-            d.remove_card(defence)
-            self.table.add_defence(idx, defence)
-
-            print(f"{d.name} defends {attack} with {defence}")
-
-            # Attacker may add another attack if possible
-            addable = [c for c in a.hand if self.validator.can_attack_additional(self.table, c)]
-            if not addable:
+            raw = input(f"  {prompt} (0 to pass): ").strip()
+            if not raw.isdigit():
+                print("  Please enter a number.")
                 continue
+            choice = int(raw)
+            if choice == 0:
+                return None
+            if 1 <= choice <= len(player.hand):
+                return player.hand[choice - 1]
+            print(f"  Pick a number between 0 and {len(player.hand)}.")
 
-            # --- simple "stop attacking" heuristic (v0.2.2) ---
-            if len(d.hand) <= 2:
-                print(f"{a.name} stops adding attacks (defender low on cards).")
-                break
+    # ── round ────────────────────────────────────────────────────────────────
 
-            non_trump_addable = [c for c in addable if c.suit != self.deck.trump]
-            candidate_pool = non_trump_addable if non_trump_addable else addable
+    def _play_round(self) -> None:
+        attacker = self.players[self.attacker_idx]
+        defender = self.players[self.defender_idx]
+        human_is_attacker = (self.attacker_idx == 0)
+        human_is_defender = (self.defender_idx == 0)
+        trump = self.deck.trump
 
-            import random
-            if random.random() < 0.4:
-                print(f"{a.name} chooses to stop attacking.")
-                break
-
-            next_attack = sorted(candidate_pool, key=lambda c: c.rank_value)[0]
-            a.remove_card(next_attack)
-            self.table.add_attack(next_attack)
-            print(f"{a.name} adds attack {next_attack}")
-
-
-        print("All attacks defended successfully.")
         self.table.clear()
 
-        a.draw_to_six(self.deck)
-        d.draw_to_six(self.deck)
+        print(f"\n{'─'*50}")
+        print(f"  Attacker: {attacker.name}  │  Defender: {defender.name}")
+        print(f"  Deck: {self.deck.remaining()} cards remaining")
+        print(f"  Trump: {trump}")
 
-        self._rotate_roles_after_successful_defence()
+        # ── attack phase ─────────────────────────────────────────────────────
+        first_attack = True
+        while True:
+            # --- attacker picks a card ---
+            if human_is_attacker:
+                if first_attack:
+                    card = self._pick_card_by_index(attacker, "Choose attack card")
+                    if card is None:
+                        # passing on first attack means nothing to defend; skip round
+                        print("  No attack played.")
+                        return
+                else:
+                    # show table state
+                    print(f"\n  Table: {self.table}")
+                    card = self._pick_card_by_index(attacker, "Add another attack card")
+            else:
+                if first_attack:
+                    card = _ai_choose_attack(attacker, self.table, trump)
+                else:
+                    if _ai_should_stop_attacking(attacker, self.table, defender, trump):
+                        card = None
+                    else:
+                        card = _ai_choose_attack(attacker, self.table, trump)
 
-        print("Roles rotated.")
-        print(f"Deck remaining: {self.deck.remaining()}")
+            if card is None:
+                break  # attacker is done
+
+            # validate rank-matching rule (after first attack)
+            if not first_attack:
+                if card.rank not in self.table.ranks_on_table():
+                    if human_is_attacker:
+                        print(f"  ✗ {card} rank not on table — pick a card matching a rank already played.")
+                        continue
+                    else:
+                        break  # AI picked bad card somehow, stop
+
+            attacker.remove_card(card)
+            self.table.add_attack(card)
+            print(f"\n  {attacker.name} attacks with {card}")
+            print(f"  Table: {self.table}")
+            first_attack = False
+
+            # ── defender responds to every undefended attack ──────────────────
+            while self.table.first_undefended_index() is not None:
+                idx = self.table.first_undefended_index()
+                attack_card = self.table.pairs[idx].attack
+
+                if human_is_defender:
+                    print(f"\n  You must defend against: {attack_card}")
+                    defence = self._pick_card_by_index(defender, "Choose defence card")
+                else:
+                    defence = _ai_choose_defence(defender, attack_card, trump)
+
+                if defence is None:
+                    # defender gives up — picks up everything
+                    taken = self.table.all_cards()
+                    defender.pick_up = taken  # flag for later
+                    print(f"\n  {defender.name} cannot defend — picks up {len(taken)} cards.")
+                    defender.hand.extend(taken)
+                    defender.sort_hand(trump)
+                    self._draw_up()
+                    self._advance_roles(defender_took=True)
+                    return
+
+                # validate the defence card
+                if not defence.can_beat(attack_card, trump):
+                    if human_is_defender:
+                        print(f"  ✗ {defence} cannot beat {attack_card}. Try again.")
+                        continue
+                    else:
+                        # AI logic error — give up
+                        taken = self.table.all_cards()
+                        print(f"\n  {defender.name} cannot defend — picks up {len(taken)} cards.")
+                        defender.hand.extend(taken)
+                        defender.sort_hand(trump)
+                        self._draw_up()
+                        self._advance_roles(defender_took=True)
+                        return
+
+                defender.remove_card(defence)
+                self.table.add_defence(idx, defence)
+                print(f"  {defender.name} defends with {defence}")
+                print(f"  Table: {self.table}")
+
+        # ── end of round: all attacks defended ───────────────────────────────
+        print(f"\n  {defender.name} successfully defended!")
+        self._draw_up()
+        self._advance_roles(defender_took=False)
+
+    # ── full game ────────────────────────────────────────────────────────────
+
+    def play(self) -> None:
+        """Run a full interactive game to completion."""
+        trump = self.deck.trump
+        round_num = 0
+
+        while True:
+            # Skip players with no cards when assigning roles
+            active = self._active_players()
+            if len(active) <= 1:
+                break
+
+            # Make sure attacker and defender are still active
+            while self.attacker_idx not in active:
+                self.attacker_idx = (self.attacker_idx + 1) % len(self.players)
+            while self.defender_idx not in active or self.defender_idx == self.attacker_idx:
+                self.defender_idx = (self.defender_idx + 1) % len(self.players)
+
+            round_num += 1
+            print(f"\n{'═'*50}")
+            print(f"  ROUND {round_num}")
+            self._play_round()
+
+            loser_idx = self._check_game_over()
+            if loser_idx is not None:
+                break
+
+        loser_idx = self._check_game_over()
+        if loser_idx is not None:
+            print(f"\n{'═'*50}")
+            print(f"  🃏 {self.players[loser_idx].name} is the DURAK (fool)!")
+        else:
+            print("\n  Game ended — no loser determined.")
+
+    # ── legacy demo methods (kept for compatibility) ─────────────────────────
+
+    def play_single_attack_demo(self) -> None:
+        """One-shot attack demo (early prototype behaviour)."""
+        self._play_round()
+
     def play_interactive_round_demo(self) -> None:
-        a = self.attacker()   # human
-        d = self.defender()   # AI
-
-        print("\n=== Interactive Round Demo ===")
-        print(f"Trump suit: {self.deck.trump.value}")
-        print(f"Deck remaining: {self.deck.remaining()}")
-        print()
-
-        # --- Human chooses first attack ---
-        while True:
-            print(f"{a.name} (YOU) hand: {a.hand_with_indexes()}")
-            raw = input("Choose attack card index (or 'q' to quit): ").strip().lower()
-            if raw == "q":
-                raise SystemExit(0)
-
-            if not raw.isdigit():
-                print("Please type a number.\n")
-                continue
-
-            idx = int(raw)
-            if idx < 0 or idx >= len(a.hand):
-                print("Index out of range.\n")
-                continue
-
-            attack_card = a.hand[idx]
-            if not self.validator.can_attack_first(attack_card):
-                print("Illegal first attack (unexpected). Try again.\n")
-                continue
-
-            a.remove_card(attack_card)
-            self.table.add_attack(attack_card)
-            print(f"\n{a.name} attacks with {attack_card}\n")
-            break
-
-        # --- Loop until pickup or all defended + you stop ---
-        while True:
-            # Defender responds to first undefended attack
-            undef_idx = self.table.first_undefended_index()
-            if undef_idx is None:
-                # all defended -> discard
-                print("All attacks defended successfully. Discarding table.")
-                self.table.clear()
-                a.draw_to_six(self.deck)
-                d.draw_to_six(self.deck)
-                self._rotate_roles_after_successful_defence()
-                return
-
-            attack = self.table.pairs[undef_idx].attack
-
-            # AI chooses cheapest beating card
-            beating_options = [c for c in d.hand if self.validator.can_defend(attack, c)]
-            if not beating_options:
-                print(f"{d.name} cannot defend {attack} and picks up!")
-                d.hand.extend(self.table.all_cards())
-                self.table.clear()
-
-                # Draw up to 6 (attacker then defender) – simple standard
-                a.draw_to_six(self.deck)
-                d.draw_to_six(self.deck)
-                return
-
-            defence = sorted(beating_options, key=lambda c: (c.suit == self.deck.trump, c.rank_value))[0]
-            d.remove_card(defence)
-            self.table.add_defence(undef_idx, defence)
-            print(f"{d.name} defends {attack} with {defence}")
-            print(f"Table: {self.table}\n")
-
-            # --- Human decides whether to add another attack ---
-            addable = [c for c in a.hand if self.validator.can_attack_additional(self.table, c)]
-            if not addable:
-                print("You have no legal additional attacks. Continuing...\n")
-                continue
-
-            print(f"Your hand: {a.hand_with_indexes()}")
-            print("Legal additional attacks:", " ".join(str(c) for c in addable))
-            raw2 = input("Add another attack? Enter index, or press Enter to stop: ").strip().lower()
-
-            if raw2 == "":
-                print("You stop attacking.\n")
-                # next loop iteration will detect all_defended (if true) and discard/rotate
-                continue
-
-            if raw2 == "q":
-                raise SystemExit(0)
-
-            if not raw2.isdigit():
-                print("Not a number. Stopping attack.\n")
-                continue
-
-            idx2 = int(raw2)
-            if idx2 < 0 or idx2 >= len(a.hand):
-                print("Index out of range. Stopping attack.\n")
-                continue
-
-            next_attack = a.hand[idx2]
-            if not self.validator.can_attack_additional(self.table, next_attack):
-                print(f"Illegal additional attack: {next_attack} (rank must match table). Stopping.\n")
-                continue
-
-            a.remove_card(next_attack)
-            self.table.add_attack(next_attack)
-            print(f"You add attack {next_attack}\n")
-
+        """Interactive single-round demo."""
+        self._play_round()
