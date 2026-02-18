@@ -39,6 +39,10 @@ class Game:
         for _ in range(6):
             for p in self.players:
                 p.hand.append(self.deck.draw())
+                
+        for p in self.players:
+            p.sort_hand(self.deck.trump)
+
 
         self.attacker_idx = 0
         self.defender_idx = 1
@@ -126,4 +130,107 @@ class Game:
 
         print("Roles rotated.")
         print(f"Deck remaining: {self.deck.remaining()}")
+    def play_interactive_round_demo(self) -> None:
+        a = self.attacker()   # human
+        d = self.defender()   # AI
+
+        print("\n=== Interactive Round Demo ===")
+        print(f"Trump suit: {self.deck.trump.value}")
+        print(f"Deck remaining: {self.deck.remaining()}")
+        print()
+
+        # --- Human chooses first attack ---
+        while True:
+            print(f"{a.name} (YOU) hand: {a.hand_with_indexes()}")
+            raw = input("Choose attack card index (or 'q' to quit): ").strip().lower()
+            if raw == "q":
+                raise SystemExit(0)
+
+            if not raw.isdigit():
+                print("Please type a number.\n")
+                continue
+
+            idx = int(raw)
+            if idx < 0 or idx >= len(a.hand):
+                print("Index out of range.\n")
+                continue
+
+            attack_card = a.hand[idx]
+            if not self.validator.can_attack_first(attack_card):
+                print("Illegal first attack (unexpected). Try again.\n")
+                continue
+
+            a.remove_card(attack_card)
+            self.table.add_attack(attack_card)
+            print(f"\n{a.name} attacks with {attack_card}\n")
+            break
+
+        # --- Loop until pickup or all defended + you stop ---
+        while True:
+            # Defender responds to first undefended attack
+            undef_idx = self.table.first_undefended_index()
+            if undef_idx is None:
+                # all defended -> discard
+                print("All attacks defended successfully. Discarding table.")
+                self.table.clear()
+                a.draw_to_six(self.deck)
+                d.draw_to_six(self.deck)
+                self._rotate_roles_after_successful_defence()
+                return
+
+            attack = self.table.pairs[undef_idx].attack
+
+            # AI chooses cheapest beating card
+            beating_options = [c for c in d.hand if self.validator.can_defend(attack, c)]
+            if not beating_options:
+                print(f"{d.name} cannot defend {attack} and picks up!")
+                d.hand.extend(self.table.all_cards())
+                self.table.clear()
+
+                # Draw up to 6 (attacker then defender) – simple standard
+                a.draw_to_six(self.deck)
+                d.draw_to_six(self.deck)
+                return
+
+            defence = sorted(beating_options, key=lambda c: (c.suit == self.deck.trump, c.rank_value))[0]
+            d.remove_card(defence)
+            self.table.add_defence(undef_idx, defence)
+            print(f"{d.name} defends {attack} with {defence}")
+            print(f"Table: {self.table}\n")
+
+            # --- Human decides whether to add another attack ---
+            addable = [c for c in a.hand if self.validator.can_attack_additional(self.table, c)]
+            if not addable:
+                print("You have no legal additional attacks. Continuing...\n")
+                continue
+
+            print(f"Your hand: {a.hand_with_indexes()}")
+            print("Legal additional attacks:", " ".join(str(c) for c in addable))
+            raw2 = input("Add another attack? Enter index, or press Enter to stop: ").strip().lower()
+
+            if raw2 == "":
+                print("You stop attacking.\n")
+                # next loop iteration will detect all_defended (if true) and discard/rotate
+                continue
+
+            if raw2 == "q":
+                raise SystemExit(0)
+
+            if not raw2.isdigit():
+                print("Not a number. Stopping attack.\n")
+                continue
+
+            idx2 = int(raw2)
+            if idx2 < 0 or idx2 >= len(a.hand):
+                print("Index out of range. Stopping attack.\n")
+                continue
+
+            next_attack = a.hand[idx2]
+            if not self.validator.can_attack_additional(self.table, next_attack):
+                print(f"Illegal additional attack: {next_attack} (rank must match table). Stopping.\n")
+                continue
+
+            a.remove_card(next_attack)
+            self.table.add_attack(next_attack)
+            print(f"You add attack {next_attack}\n")
 

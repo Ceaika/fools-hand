@@ -10,6 +10,9 @@ from .card import Card
 class Player:
     name: str
     hand: List[Card] = field(default_factory=list)
+    
+    def sort_hand(self, trump) -> None:
+        self.hand.sort(key=lambda c: (c.suit == trump, c.rank_value))
 
     def draw_to_six(self, deck) -> None:
         while len(self.hand) < 6 and deck.remaining() > 0:
@@ -20,3 +23,8 @@ class Player:
 
     def __str__(self) -> str:
         return f"{self.name}({len(self.hand)}): " + " ".join(str(c) for c in self.hand)
+    def hand_with_indexes(self) -> str:
+        return "  ".join(f"[{i}] {c}" for i, c in enumerate(self.hand))
+
+    def has_any_defence(self, attack_card, validator) -> bool:
+        return any(validator.can_defend(attack_card, c) for c in self.hand)
