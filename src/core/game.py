@@ -129,17 +129,25 @@ class Game:
             return active[0]
         return None
 
-    # ── interactive helpers ──────────────────────────────────────────────────
+    # ── display helpers ──────────────────────────────────────────────────────
+
+    def _show_state(self) -> None:
+        """Print the current hand and table cleanly."""
+        player = self.players[0]
+        trump = self.deck.trump
+        print(f"\n  Trump: {trump}  |  Deck: {self.deck.remaining()} cards")
+        print(f"  Bot cards: {self.players[1].card_count()}")
+        if not self.table.is_empty():
+            print(f"  Table: {self.table}")
+        print(f"\n  Your hand: ", end="")
+        for i, card in enumerate(player.hand, start=1):
+            print(f"[{i}] {card}", end="  ")
+        print()
 
     def _pick_card_by_index(self, player: Player, prompt: str) -> Optional[Card]:
-        """Show player's hand and let them pick a card by index, or 0 to pass."""
-        print(f"\n  {player}")
-        numbered = list(enumerate(player.hand, start=1))
-        for idx, card in numbered:
-            print(f"    [{idx}] {card}")
-        print(f"    [0] Pass / stop")
+        """Let the player pick a card by index, or 0 to pass."""
         while True:
-            raw = input(f"  {prompt} (0 to pass): ").strip()
+            raw = input(f"\n  {prompt} (0 to pass): ").strip()
             if not raw.isdigit():
                 print("  Please enter a number.")
                 continue
@@ -150,6 +158,16 @@ class Game:
                 return player.hand[choice - 1]
             print(f"  Pick a number between 0 and {len(player.hand)}.")
 
+    def _thinking(self, name: str) -> None:
+        """Simulate the bot pausing to think."""
+        import time
+        print(f"\n  {name} is thinking...", end="", flush=True)
+        time.sleep(1.0)
+        print(" done.")
+
+    def _wait(self) -> None:
+        input("\n  Press Enter for next round...")
+
     # ── round ────────────────────────────────────────────────────────────────
 
     def _play_round(self) -> None:
@@ -158,30 +176,32 @@ class Game:
         human_is_attacker = (self.attacker_idx == 0)
         human_is_defender = (self.defender_idx == 0)
         trump = self.deck.trump
+        validator = MoveValidator(trump)
 
         self.table.clear()
 
         print(f"\n{'─'*50}")
-        print(f"  Attacker: {attacker.name}  │  Defender: {defender.name}")
-        print(f"  Deck: {self.deck.remaining()} cards remaining")
-        print(f"  Trump: {trump}")
+        print(f"  {'Your turn to attack' if human_is_attacker else f'{attacker.name} is attacking'}"
+              f"  |  {'You defend' if human_is_defender else f'{defender.name} defends'}")
 
         # ── attack phase ─────────────────────────────────────────────────────
         first_attack = True
         while True:
-            # --- attacker picks a card ---
             if human_is_attacker:
-                if first_attack:
-                    card = self._pick_card_by_index(attacker, "Choose attack card")
-                    if card is None:
-                        # passing on first attack means nothing to defend; skip round
-                        print("  No attack played.")
-                        return
-                else:
-                    # show table state
-                    print(f"\n  Table: {self.table}")
-                    card = self._pick_card_by_index(attacker, "Add another attack card")
+                self._show_state()
+                prompt = "Choose attack card" if first_attack else "Add another card (pile on)"
+                card = self._pick_card_by_index(attacker, prompt)
+                if card is None:
+                    if first_attack:
+                        print("  You passed — no attack this round.")
+                    else:
+                        print("  You stop attacking.")
+                    break
+                if not first_attack and not validator.can_attack(card, self.table):
+                    print(f"  ✗ {card} — rank not on table, pick a matching rank or pass.")
+                    continue
             else:
+                self._thinking(attacker.name)
                 if first_attack:
                     card = _ai_choose_attack(attacker, self.table, trump)
                 else:
@@ -189,108 +209,78 @@ class Game:
                         card = None
                     else:
                         card = _ai_choose_attack(attacker, self.table, trump)
-
-            if card is None:
-                break  # attacker is done
-
-            # validate rank-matching rule (after first attack)
-            if not first_attack:
-                validator = MoveValidator(trump)
-                if not validator.can_attack(card, self.table):
-                    if human_is_attacker:
-                        print(f"  ✗ {card} rank not on table — pick a card matching a rank already played.")
-                        continue
-                    else:
-                        break  # AI picked bad card somehow, stop
+                if card is None:
+                    print(f"  {attacker.name} stops attacking.")
+                    break
 
             attacker.remove_card(card)
             self.table.add_attack(card)
-            print(f"\n  {attacker.name} attacks with {card}")
-            print(f"  Table: {self.table}")
+            print(f"  {attacker.name} plays  →  {card}")
             first_attack = False
 
-            # ── defender responds to every undefended attack ──────────────────
+            # ── defender responds ─────────────────────────────────────────────
             while self.table.first_undefended_index() is not None:
                 idx = self.table.first_undefended_index()
                 attack_card = self.table.pairs[idx].attack
 
                 if human_is_defender:
-                    print(f"\n  You must defend against: {attack_card}")
+                    self._show_state()
+                    print(f"  Defend against: {attack_card}")
                     defence = self._pick_card_by_index(defender, "Choose defence card")
+                    if defence is not None and not validator.can_defend(defence, attack_card):
+                        print(f"  ✗ {defence} cannot beat {attack_card}. Try again.")
+                        continue
                 else:
+                    self._thinking(defender.name)
                     defence = _ai_choose_defence(defender, attack_card, trump)
 
                 if defence is None:
-                    # defender gives up — picks up everything
                     taken = self.table.all_cards()
-                    defender.pick_up = taken  # flag for later
-                    print(f"\n  {defender.name} cannot defend — picks up {len(taken)} cards.")
+                    print(f"  {defender.name} picks up {len(taken)} cards.")
                     defender.hand.extend(taken)
                     defender.sort_hand(trump)
                     self._draw_up()
                     self._advance_roles(defender_took=True)
+                    self._wait()
                     return
-
-                # validate the defence card
-                validator = MoveValidator(trump)
-                if not validator.can_defend(defence, attack_card):
-                    if human_is_defender:
-                        print(f"  ✗ {defence} cannot beat {attack_card}. Try again.")
-                        continue
-                    else:
-                        # AI logic error — give up
-                        taken = self.table.all_cards()
-                        print(f"\n  {defender.name} cannot defend — picks up {len(taken)} cards.")
-                        defender.hand.extend(taken)
-                        defender.sort_hand(trump)
-                        self._draw_up()
-                        self._advance_roles(defender_took=True)
-                        return
 
                 defender.remove_card(defence)
                 self.table.add_defence(idx, defence)
-                print(f"  {defender.name} defends with {defence}")
-                print(f"  Table: {self.table}")
+                print(f"  {defender.name} responds  →  {defence}")
 
-        # ── end of round: all attacks defended ───────────────────────────────
-        print(f"\n  {defender.name} successfully defended!")
+        # ── end of round ─────────────────────────────────────────────────────
+        print(f"\n  {defender.name} defended successfully.")
         self._draw_up()
         self._advance_roles(defender_took=False)
+        self._wait()
 
     # ── full game ────────────────────────────────────────────────────────────
 
     def play(self) -> None:
         """Run a full interactive game to completion."""
-        trump = self.deck.trump
-        round_num = 0
+        print(f"\n  Trump suit: {self.deck.trump}  ({self.deck.peek_bottom()})")
 
         while True:
-            # Skip players with no cards when assigning roles
             active = self._active_players()
             if len(active) <= 1:
                 break
 
-            # Make sure attacker and defender are still active
             while self.attacker_idx not in active:
                 self.attacker_idx = (self.attacker_idx + 1) % len(self.players)
             while self.defender_idx not in active or self.defender_idx == self.attacker_idx:
                 self.defender_idx = (self.defender_idx + 1) % len(self.players)
 
-            round_num += 1
-            print(f"\n{'═'*50}")
-            print(f"  ROUND {round_num}")
             self._play_round()
 
-            loser_idx = self._check_game_over()
-            if loser_idx is not None:
+            if self._check_game_over() is not None:
                 break
 
         loser_idx = self._check_game_over()
+        print(f"\n{'═'*50}")
         if loser_idx is not None:
-            print(f"\n{'═'*50}")
             print(f"  🃏 {self.players[loser_idx].name} is the DURAK (fool)!")
         else:
-            print("\n  Game ended — no loser determined.")
+            print("  Game ended.")
 
     # ── legacy demo methods (kept for compatibility) ─────────────────────────
 

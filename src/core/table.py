@@ -58,6 +58,9 @@ class Table:
     def all_defended(self) -> bool:
         return self.first_undefended_index() is None
 
+    def is_empty(self) -> bool:
+        return len(self.pairs) == 0
+
     def __str__(self) -> str:
         if not self.pairs:
             return "(empty)"

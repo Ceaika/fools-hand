@@ -18,6 +18,9 @@ class Player:
     def remove_card(self, card: Card) -> None:
         self.hand.remove(card)
 
+    def card_count(self) -> int:
+        return len(self.hand)
+
     def sort_hand(self, trump: Suit) -> None:
         self.hand.sort(key=lambda c: c.sort_key(trump))
 
