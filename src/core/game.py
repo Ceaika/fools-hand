@@ -159,11 +159,14 @@ class Game:
             print(f"  Pick a number between 0 and {len(player.hand)}.")
 
     def _thinking(self, name: str) -> None:
-        """Simulate the bot pausing to think."""
+        """Animate thinking dots then leave cursor on same line."""
         import time
-        print(f"\n  {name} is thinking...", end="", flush=True)
-        time.sleep(1.0)
-        print(" done.")
+        print(f"\n  {name} is thinking ", end="", flush=True)
+        for _ in range(3):
+            time.sleep(0.4)
+            print(".", end="", flush=True)
+        time.sleep(0.3)
+        print()
 
     def _wait(self) -> None:
         input("\n  Press Enter for next round...")
@@ -215,7 +218,10 @@ class Game:
 
             attacker.remove_card(card)
             self.table.add_attack(card)
-            print(f"  {attacker.name} plays  →  {card}")
+            if not human_is_attacker:
+                pass  # bot action printed after defence below
+            else:
+                print(f"  You play  →  {card}")
             first_attack = False
 
             # ── defender responds ─────────────────────────────────────────────
@@ -236,6 +242,8 @@ class Game:
 
                 if defence is None:
                     taken = self.table.all_cards()
+                    if not human_is_attacker:
+                        print(f"  {attacker.name} plays  →  {attack_card}")
                     print(f"  {defender.name} picks up {len(taken)} cards.")
                     defender.hand.extend(taken)
                     defender.sort_hand(trump)
@@ -246,7 +254,10 @@ class Game:
 
                 defender.remove_card(defence)
                 self.table.add_defence(idx, defence)
-                print(f"  {defender.name} responds  →  {defence}")
+                if not human_is_attacker:
+                    print(f"  {attacker.name} plays  →  {attack_card}  /  {defence}  ←  {defender.name}")
+                else:
+                    print(f"  {defender.name} responds  →  {defence}")
 
         # ── end of round ─────────────────────────────────────────────────────
         print(f"\n  {defender.name} defended successfully.")
