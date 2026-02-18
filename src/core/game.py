@@ -5,6 +5,7 @@ from typing import List, Optional
 
 from .card import Card, Suit
 from .deck import Deck
+from .move_validator import MoveValidator
 from .player import Player
 from .table import Table
 
@@ -13,12 +14,8 @@ from .table import Table
 
 def _ai_choose_attack(player: Player, table: Table, trump: Suit) -> Optional[Card]:
     """Pick the weakest valid attack card. Prefer non-trumps."""
-    valid: List[Card] = []
-    on_table = table.ranks_on_table()
-
-    for card in player.hand:
-        if table.all_cards() == [] or card.rank in on_table:
-            valid.append(card)
+    validator = MoveValidator(trump)
+    valid = validator.valid_attacks(player.hand, table)
 
     if not valid:
         return None
@@ -55,17 +52,15 @@ def _ai_choose_defence(defender: Player, attack_card: Card, trump: Suit) -> Opti
     Pick the cheapest card that beats the attack.
     Prefer same-suit over trump.
     """
-    same_suit = [c for c in defender.hand
-                 if c.suit == attack_card.suit and c.can_beat(attack_card, trump)]
-    trump_cards = [c for c in defender.hand
-                   if c.is_trump(trump) and not attack_card.is_trump(trump)
-                   and c.can_beat(attack_card, trump)]
+    validator = MoveValidator(trump)
+    valid = validator.valid_defences(defender.hand, attack_card)
 
-    if same_suit:
-        return min(same_suit, key=lambda c: c.rank_value())
-    if trump_cards:
-        return min(trump_cards, key=lambda c: c.rank_value())
-    return None
+    if not valid:
+        return None
+
+    same_suit = [c for c in valid if c.suit == attack_card.suit]
+    pool = same_suit if same_suit else valid
+    return min(pool, key=lambda c: c.rank_value())
 
 
 # ── Game ─────────────────────────────────────────────────────────────────────
@@ -200,7 +195,8 @@ class Game:
 
             # validate rank-matching rule (after first attack)
             if not first_attack:
-                if card.rank not in self.table.ranks_on_table():
+                validator = MoveValidator(trump)
+                if not validator.can_attack(card, self.table):
                     if human_is_attacker:
                         print(f"  ✗ {card} rank not on table — pick a card matching a rank already played.")
                         continue
@@ -236,7 +232,8 @@ class Game:
                     return
 
                 # validate the defence card
-                if not defence.can_beat(attack_card, trump):
+                validator = MoveValidator(trump)
+                if not validator.can_defend(defence, attack_card):
                     if human_is_defender:
                         print(f"  ✗ {defence} cannot beat {attack_card}. Try again.")
                         continue
