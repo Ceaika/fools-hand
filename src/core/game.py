@@ -94,15 +94,27 @@ class Game:
 
             # Attacker may add another attack if possible
             addable = [c for c in a.hand if self.validator.can_attack_additional(self.table, c)]
-
             if not addable:
                 continue
 
-            next_attack = sorted(addable, key=lambda c: (c.suit == self.deck.trump, c.rank_value))[0]
+            # --- simple "stop attacking" heuristic (v0.2.2) ---
+            if len(d.hand) <= 2:
+                print(f"{a.name} stops adding attacks (defender low on cards).")
+                break
+
+            non_trump_addable = [c for c in addable if c.suit != self.deck.trump]
+            candidate_pool = non_trump_addable if non_trump_addable else addable
+
+            import random
+            if random.random() < 0.4:
+                print(f"{a.name} chooses to stop attacking.")
+                break
+
+            next_attack = sorted(candidate_pool, key=lambda c: c.rank_value)[0]
             a.remove_card(next_attack)
             self.table.add_attack(next_attack)
-
             print(f"{a.name} adds attack {next_attack}")
+
 
         print("All attacks defended successfully.")
         self.table.clear()
