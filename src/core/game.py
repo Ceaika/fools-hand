@@ -59,53 +59,59 @@ class Game:
 
         print("=== Fool's Hand Prototype ===")
         print(f"Trump suit: {self.deck.trump.value}")
-        print(f"Deck bottom (trump reveal card): {self.deck.peek_bottom()}")
-        print()
-        print("Initial hands:")
-        print(a)
-        print(d)
         print()
 
-        # attacker chooses "lowest" card
+        # First attack
         attack_card = sorted(a.hand, key=lambda c: (c.suit == self.deck.trump, c.rank_value))[0]
         a.remove_card(attack_card)
-
         self.table.add_attack(attack_card)
+
         print(f"{a.name} attacks with {attack_card}")
-        print(f"Table: {self.table}")
-        print()
 
-        # defender chooses cheapest beating card (naive)
-        beating_options = [c for c in d.hand if self.validator.can_defend(attack_card, c)]
-        if beating_options:
-            defence_card = sorted(beating_options, key=lambda c: (c.suit == self.deck.trump, c.rank_value))[0]
-            d.remove_card(defence_card)
-            self.table.add_defence(0, defence_card)
-            print(f"{d.name} defends with {defence_card}")
-            print(f"Table: {self.table}")
-            print()
+        while True:
+            # Defender must respond to each undefended attack
+            idx = self.table.first_undefended_index()
+            if idx is None:
+                break  # all defended
 
-            self.table.clear()
+            attack = self.table.pairs[idx].attack
 
-            # draw to six (attacker first)
-            a.draw_to_six(self.deck)
-            d.draw_to_six(self.deck)
+            beating_options = [c for c in d.hand if self.validator.can_defend(attack, c)]
+            if not beating_options:
+                print(f"{d.name} cannot defend {attack} and picks up.")
+                d.hand.extend(self.table.all_cards())
+                self.table.clear()
 
-            print("Defence successful. Roles rotate.")
-            self._rotate_roles_after_successful_defence()
+                a.draw_to_six(self.deck)
+                d.draw_to_six(self.deck)
+                return
 
-        else:
-            print(f"{d.name} cannot defend and picks up.")
-            d.hand.extend(self.table.all_cards())
-            self.table.clear()
+            defence = sorted(beating_options, key=lambda c: (c.suit == self.deck.trump, c.rank_value))[0]
+            d.remove_card(defence)
+            self.table.add_defence(idx, defence)
 
-            a.draw_to_six(self.deck)
-            d.draw_to_six(self.deck)
+            print(f"{d.name} defends {attack} with {defence}")
 
-            print("Pickup complete. Attacker remains attacker (2-player simple rule).")
+            # Attacker may add another attack if possible
+            addable = [c for c in a.hand if self.validator.can_attack_additional(self.table, c)]
 
-        print()
-        print("After round:")
-        print(self.players[self.attacker_idx])
-        print(self.players[self.defender_idx])
+            if not addable:
+                continue
+
+            next_attack = sorted(addable, key=lambda c: (c.suit == self.deck.trump, c.rank_value))[0]
+            a.remove_card(next_attack)
+            self.table.add_attack(next_attack)
+
+            print(f"{a.name} adds attack {next_attack}")
+
+        print("All attacks defended successfully.")
+        self.table.clear()
+
+        a.draw_to_six(self.deck)
+        d.draw_to_six(self.deck)
+
+        self._rotate_roles_after_successful_defence()
+
+        print("Roles rotated.")
         print(f"Deck remaining: {self.deck.remaining()}")
+
