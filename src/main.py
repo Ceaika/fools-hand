@@ -1,11 +1,8 @@
-from src.core.game import Game
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-
-def main() -> None:
-    game = Game()
-    game.setup(num_players=2)
-    game.play()
-
+from src.ui.app import run
 
 if __name__ == "__main__":
-    main()
+    run()

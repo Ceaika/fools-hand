@@ -7,7 +7,7 @@ from .table import Table
 
 
 class MoveValidator:
-    """Centralised Durak rule checking, extracted from game loop logic."""
+
 
     def __init__(self, trump: Suit) -> None:
         self.trump = trump
