@@ -59,8 +59,9 @@ class MainMenu:
         self._panel_x      = float(-_PANEL_W)   # current x (off screen when closed)
         self._credits_tab  = pygame.Rect(0, HEIGHT - 48, 110, 32)
 
-        self.x_btn     = pygame.Rect(WIDTH - 48, 12, 36, 36)
-        self._vignette = self._make_vignette()
+        self.x_btn        = pygame.Rect(WIDTH - 48, 12, 36, 36)
+        self._vignette    = self._make_vignette()
+        self._draw_target = self.screen  # default, overridden each draw()
 
         # title easter egg
         self._title_clicks  = 0
@@ -87,36 +88,33 @@ class MainMenu:
 
     # ── public ───────────────────────────────────────────────────────────────
 
-    def handle_event(self, event: pygame.event.Event) -> str | None:
+    def handle_event_with_rect(self, event: pygame.event.Event) -> tuple:
+        """Like handle_event but also returns the clicked button's rect."""
         if event.type == pygame.QUIT:
-            return "quit"
-
+            return "quit", None
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             if self.x_btn.collidepoint(event.pos):
-                return "quit"
-
-            # title easter egg
+                return "quit", self.x_btn
             if self._title_rect.collidepoint(event.pos) and not self._decoding:
                 self._title_clicks += 1
                 if self._title_clicks >= _CLICKS_NEEDED and not self._title_decoded:
                     self._decoding    = True
                     self._decode_tick = 0
-
-            # toggle credits panel via tab
             if self._credits_tab.collidepoint(event.pos):
                 self._panel_open = not self._panel_open
-                return None
-
-            # close panel if clicking outside it while open
+                return None, None
             panel_rect = pygame.Rect(0, 0, int(self._panel_x) + _PANEL_W, HEIGHT)
             if self._panel_open and not panel_rect.collidepoint(event.pos):
                 self._panel_open = False
-                return None
-
+                return None, None
         for btn, action in self.buttons:
             if btn.handle_event(event):
-                return action
-        return None
+                return action, btn.rect.copy()
+        return None, None
+
+    def handle_event(self, event: pygame.event.Event) -> str | None:
+        action, _ = self.handle_event_with_rect(event)
+        return action
 
     def update(self) -> None:
         self.tick += 1
@@ -153,17 +151,18 @@ class MainMenu:
             self._title_decoded = True
             self._decode_text   = list(_TITLE_SECRET)
 
-    def draw(self) -> None:
-        self.screen.fill(BG)
+    def draw(self, surface: pygame.Surface | None = None) -> None:
+        self._draw_target = surface if surface is not None else self.screen
+        t = self._draw_target
+        t.fill(BG)
         self._draw_bg_grid()
-        self.screen.blit(self._vignette, (0, 0))
+        t.blit(self._vignette, (0, 0))
         self._draw_title()
         self._draw_divider()
         for btn, _ in self.buttons:
-            btn.draw(self.screen)
+            btn.draw(t)
         self._draw_x_button()
         self._draw_footer()
-        # panel drawn last so it sits on top
         self._draw_credits_panel()
 
     # ── credits panel ─────────────────────────────────────────────────────────
@@ -184,10 +183,10 @@ class MainMenu:
         panel_rect = pygame.Rect(px, 0, _PANEL_W, HEIGHT)
         panel_surf = pygame.Surface((_PANEL_W, HEIGHT), pygame.SRCALPHA)
         panel_surf.fill((20, 10, 40, 230))
-        self.screen.blit(panel_surf, (px, 0))
+        self._draw_target.blit(panel_surf, (px, 0))
 
         # neon left border edge
-        pygame.draw.line(self.screen, NEON,
+        pygame.draw.line(self._draw_target, NEON,
                          (px + _PANEL_W, 0),
                          (px + _PANEL_W, HEIGHT), 2)
 
@@ -198,19 +197,19 @@ class MainMenu:
         pad   = px + 24
 
         title_surf = small.render("CREDITS", False, NEON_GLOW)
-        self.screen.blit(title_surf, (pad, y))
+        self._draw_target.blit(title_surf, (pad, y))
         y += title_surf.get_height() + 4
-        pygame.draw.rect(self.screen, NEON, (pad, y, _PANEL_W - 48, 2))
+        pygame.draw.rect(self._draw_target, NEON, (pad, y, _PANEL_W - 48, 2))
         y += 16
 
         for header, value in self._credits:
             if header:
                 label = small.render(header, False, NEON)
-                self.screen.blit(label, (pad, y))
+                self._draw_target.blit(label, (pad, y))
                 y += label.get_height() + 8
             elif value:
                 label = body.render(value, False, TEXT_MAIN)
-                self.screen.blit(label, (pad, y))
+                self._draw_target.blit(label, (pad, y))
                 y += label.get_height() + 6
 
         self._draw_credits_tab(px)
@@ -226,15 +225,15 @@ class MainMenu:
 
         tab_surf = pygame.Surface((tab.w, tab.h), pygame.SRCALPHA)
         tab_surf.fill((20, 10, 40, 210))
-        self.screen.blit(tab_surf, (tab.x, tab.y))
-        pygame.draw.rect(self.screen, colour, tab, width=1, border_radius=3)
+        self._draw_target.blit(tab_surf, (tab.x, tab.y))
+        pygame.draw.rect(self._draw_target, colour, tab, width=1, border_radius=3)
 
         # arrow points right when closed, left when open
         arrow = ">" if not self._panel_open else "<"
         label = self.fonts["btn"].render(arrow, False, TEXT_MAIN)
         lx    = tab.centerx - label.get_width() // 2
         ly    = tab.centery - label.get_height() // 2
-        self.screen.blit(label, (lx, ly))
+        self._draw_target.blit(label, (lx, ly))
 
     # ── quit repulsion ────────────────────────────────────────────────────────
 
@@ -289,9 +288,9 @@ class MainMenu:
         grid_col = (30, 15, 50)
         spacing  = 40
         for x in range(0, WIDTH, spacing):
-            pygame.draw.line(self.screen, grid_col, (x, 0), (x, HEIGHT))
+            pygame.draw.line(self._draw_target, grid_col, (x, 0), (x, HEIGHT))
         for y in range(0, HEIGHT, spacing):
-            pygame.draw.line(self.screen, grid_col, (0, y), (WIDTH, y))
+            pygame.draw.line(self._draw_target, grid_col, (0, y), (WIDTH, y))
 
     def _draw_title(self) -> None:
         pulse      = abs(math.sin(self.tick * 0.03)) * 6
@@ -305,12 +304,12 @@ class MainMenu:
             glow = title_font.render(display, False, NEON_GLOW)
             glow.set_alpha(alpha)
             gx = WIDTH // 2 - glow.get_width() // 2
-            self.screen.blit(glow, (gx - offset // 2, ty + int(pulse)))
-            self.screen.blit(glow, (gx + offset // 2, ty + int(pulse)))
+            self._draw_target.blit(glow, (gx - offset // 2, ty + int(pulse)))
+            self._draw_target.blit(glow, (gx + offset // 2, ty + int(pulse)))
 
         title = title_font.render(display, False, colour)
         tx    = WIDTH // 2 - title.get_width() // 2
-        self.screen.blit(title, (tx, ty + int(pulse)))
+        self._draw_target.blit(title, (tx, ty + int(pulse)))
 
         # store rect for click detection
         self._title_rect = pygame.Rect(tx, ty + int(pulse),
@@ -320,34 +319,34 @@ class MainMenu:
         ux = WIDTH // 2 - uw // 2
         uy = ty + title.get_height() + 10 + int(pulse)
         line_col = NEON_GLOW if self._title_decoded else NEON
-        pygame.draw.rect(self.screen, line_col,  (ux, uy,     uw, 3))
-        pygame.draw.rect(self.screen, NEON_GLOW, (ux, uy - 1, uw, 1))
+        pygame.draw.rect(self._draw_target, line_col,  (ux, uy,     uw, 3))
+        pygame.draw.rect(self._draw_target, NEON_GLOW, (ux, uy - 1, uw, 1))
 
         sub_text = "A  DURAK  CARD  GAME" if not self._title_decoded else "the original name"
         sub      = self.fonts["sub"].render(sub_text, False, TEXT_DIM)
         sx       = WIDTH // 2 - sub.get_width() // 2
-        self.screen.blit(sub, (sx, uy + 14))
+        self._draw_target.blit(sub, (sx, uy + 14))
 
     def _draw_divider(self) -> None:
         y  = HEIGHT // 2 + 10
         x0 = WIDTH // 2 - BTN_W // 2
         x1 = WIDTH // 2 + BTN_W // 2
-        pygame.draw.line(self.screen, PURPLE, (x0, y), (x1, y), 1)
+        pygame.draw.line(self._draw_target, PURPLE, (x0, y), (x1, y), 1)
 
     def _draw_x_button(self) -> None:
         mouse  = pygame.mouse.get_pos()
         colour = NEON if self.x_btn.collidepoint(mouse) else PURPLE
-        pygame.draw.rect(self.screen, PURPLE_DIM, self.x_btn, border_radius=4)
-        pygame.draw.rect(self.screen, colour, self.x_btn, width=1, border_radius=4)
+        pygame.draw.rect(self._draw_target, PURPLE_DIM, self.x_btn, border_radius=4)
+        pygame.draw.rect(self._draw_target, colour, self.x_btn, width=1, border_radius=4)
         label = self.fonts["small"].render("X", False, TEXT_MAIN)
         lx    = self.x_btn.centerx - label.get_width() // 2
         ly    = self.x_btn.centery - label.get_height() // 2
-        self.screen.blit(label, (lx, ly))
+        self._draw_target.blit(label, (lx, ly))
 
     def _draw_footer(self) -> None:
         small = self.fonts["small"]
         ver   = small.render("pre-release", False, TEXT_DIM)
-        self.screen.blit(ver, (12, HEIGHT - ver.get_height() - 10))
+        self._draw_target.blit(ver, (12, HEIGHT - ver.get_height() - 10))
         rights = small.render("(c) 2025 Dumitru Ceaicovschi", False, TEXT_DIM)
-        self.screen.blit(rights, (WIDTH - rights.get_width() - 12,
+        self._draw_target.blit(rights, (WIDTH - rights.get_width() - 12,
                                    HEIGHT - rights.get_height() - 10))
