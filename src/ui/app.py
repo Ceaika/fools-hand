@@ -10,6 +10,8 @@ from .constants import WIDTH, HEIGHT, FPS, TITLE
 from .menu import MainMenu
 from .play_select import PlaySelectScreen
 from .transition import ZoomTransition
+from .game_screen import GameScreen
+from ..core.game import Game
 
 
 def _load_fonts() -> dict:
@@ -43,6 +45,8 @@ def run() -> None:
     menu        = MainMenu(screen, fonts)
     play_select = PlaySelectScreen(screen, fonts)
     transition  = ZoomTransition()
+    game_obj    = None
+    game_screen = None
 
     screens = {
         "menu":        menu,
@@ -93,15 +97,30 @@ def run() -> None:
                 elif action == "back" and rect:
                     zoom_to("menu", rect, direction=-1)
                 elif action == "singleplayer":
-                    pass
+                    game_obj    = Game()
+                    game_obj.setup(num_players=2)
+                    game_screen = GameScreen(screen, fonts, game_obj)
+                    screens["game"] = game_screen
+                    current = "game"
+
+            elif current == "game":
+                action = game_screen.handle_event(event)
+                if action == "quit":
+                    pygame.quit()
+                    sys.exit()
+                elif action == "back":
+                    current = "play_select"
 
         if not transition.busy:
-            screens[current].update()
+            screens[current].update() if current != "game" else game_screen.update()
 
         if transition.busy:
             transition.update()
             transition.draw(screen)
         else:
-            screens[current].draw()
+            if current == "game":
+                game_screen.draw()
+            else:
+                screens[current].draw()
 
         pygame.display.flip()
