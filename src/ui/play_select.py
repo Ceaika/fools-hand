@@ -20,7 +20,8 @@ class PlaySelectScreen:
     Mode selection. Returns: 'singleplayer' | 'back' | 'quit'
     """
 
-    def __init__(self, screen: pygame.Surface, fonts: dict) -> None:
+    def __init__(self, screen: pygame.Surface, fonts: dict,
+                 vignette: pygame.Surface) -> None:
         self.screen = screen
         self.fonts  = fonts
         self.tick   = 0
@@ -40,7 +41,7 @@ class PlaySelectScreen:
         self._mp_hover = False
 
         self._back_btn = Button(90, 24, "< BACK", w=140, h=36, font=fonts["small"])
-        self._vignette = self._make_vignette()
+        self._vignette = vignette
 
     # ── public ───────────────────────────────────────────────────────────────
 

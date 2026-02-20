@@ -36,8 +36,8 @@ BTN_H      = 52
 BTN_GAP    = 16
 BTN_RADIUS = 4
 
-CARD_W     = 72
-CARD_H     = 100
+CARD_W     = 80
+CARD_H     = 116
 
 import os as _os
 FONT_PATH = _os.path.join(_os.path.dirname(__file__), "assets", "fonts", "PressStart2P.ttf")

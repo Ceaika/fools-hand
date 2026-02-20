@@ -27,7 +27,8 @@ _CLICKS_NEEDED = 14
 
 
 class MainMenu:
-    def __init__(self, screen: pygame.Surface, fonts: dict) -> None:
+    def __init__(self, screen: pygame.Surface, fonts: dict,
+                 vignette: pygame.Surface) -> None:
         self.screen = screen
         self.fonts  = fonts
         self.tick   = 0
@@ -60,8 +61,8 @@ class MainMenu:
         self._credits_tab  = pygame.Rect(0, HEIGHT - 48, 110, 32)
 
         self.x_btn        = pygame.Rect(WIDTH - 48, 12, 36, 36)
-        self._vignette    = self._make_vignette()
-        self._draw_target = self.screen  # default, overridden each draw()
+        self._vignette    = vignette
+        self._draw_target = self.screen
 
         # title easter egg
         self._title_clicks  = 0

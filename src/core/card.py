@@ -45,9 +45,9 @@ class Card:
         return False
 
     def sort_key(self, trump: Suit) -> tuple:
-        """Non-trumps first (by suit index then rank), trumps last."""
+        """Non-trumps first (by rank, then suit as tiebreaker), trumps last."""
         is_trump = 1 if self.suit == trump else 0
-        return (is_trump, list(Suit).index(self.suit), self.rank_value())
+        return (is_trump, self.rank_value(), list(Suit).index(self.suit))
 
     def __str__(self) -> str:
         return f"{self.rank}{self.suit}"

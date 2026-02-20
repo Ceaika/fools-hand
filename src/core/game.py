@@ -94,6 +94,17 @@ class Game:
         print(f"\nTrump suit: {self.deck.trump}")
         print(f"Trump card: {self.deck.peek_bottom()}")
 
+    def setup_no_deal(self, num_players: int = 2) -> None:
+        """Same as setup() but leaves all hands empty — GameScreen deals via animation."""
+        assert 2 <= num_players <= 6
+        self.deck    = Deck.new_shuffled(seed=self.seed)
+        self.players = [Player(name=f"Bot {i}" if i > 0 else "You")
+                        for i in range(num_players)]
+        self.attacker_idx = 0
+        self.defender_idx = 1
+        print(f"\nTrump suit: {self.deck.trump}")
+        print(f"Trump card: {self.deck.peek_bottom()}")
+
     # ── round helpers ────────────────────────────────────────────────────────
 
     def _draw_up(self) -> None:
