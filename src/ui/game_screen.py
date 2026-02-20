@@ -13,8 +13,9 @@ from .constants import (
     CARD_W, CARD_H,
 )
 
-_BOT_DELAY   = 90
-_ROUND_DELAY = 90
+_BOT_DELAY    = 90
+_ROUND_DELAY  = 90
+_ATTACK_COMMIT_DELAY = 180   # ~3 seconds at 60fps — window to add more attack cards
 
 S_HUMAN_ATTACK = "human_attack"
 S_HUMAN_DEFEND = "human_defend"
@@ -24,9 +25,11 @@ S_ROUND_OVER   = "round_over"
 S_GAME_OVER    = "game_over"
 
 S_DEALING      = "dealing"
+S_DRAWING      = "drawing"   # draw-up animation in progress
 
 _STATUS = {
     S_DEALING:      "DEAL",
+    S_DRAWING:      "DEAL",
     S_HUMAN_ATTACK: "ATTACK",
     S_HUMAN_DEFEND: "DEFEND",
     S_PILE_ON:      "PILE ON",
@@ -99,6 +102,7 @@ class GameScreen:
         self._bot_timer    = 0
         self._bot_action   = None
         self._round_timer  = 0
+        self._attack_commit_timer = 0   # ticks after last attack card lands before defence begins
 
         # visual table state — list of (atk_str, dfn_str|None)
         # updated incrementally as cards land, so settled cards always show
@@ -380,18 +384,16 @@ class GameScreen:
             defence     = _ai_choose_defence(defender, attack_card, trump)
 
             if defence is None:
-                # bot takes cards
+                # bot takes cards — sweep to bot hand, then do animated draw-up
                 pairs = list(self._vis_table)
                 self._vis_table = []
                 taken = g.table.all_cards()
                 defender.hand.extend(taken)
                 defender.sort_hand(trump)
-                g._draw_up()
                 g._advance_roles(defender_took=True)
                 def after():
-                    self._animating   = False
-                    self._round_timer = _ROUND_DELAY
-                    self._state       = S_ROUND_OVER
+                    self._animating = False
+                    self._do_finish_round(defender_took=True)
                 self._sweep_table(pairs, to_player=False, on_all_done=after)
             else:
                 pair_idx = idx
@@ -433,6 +435,7 @@ class GameScreen:
 
     def _finish_round(self, defender_took):
         """Called from human actions."""
+        self._attack_commit_timer = 0   # cancel any pending commit window
         pairs = list(self._vis_table)
         self._vis_table = []
 
@@ -453,15 +456,67 @@ class GameScreen:
     def _do_finish_round(self, defender_took):
         g = self.game
         if not defender_took:
-            g._draw_up()
             g._advance_roles(defender_took=False)
         loser = g._check_game_over()
         if loser is not None:
             name = "You are" if loser == 0 else f"{g.players[loser].name} is"
             self._set(S_GAME_OVER, f"{name} the DURAK!")
+            return
+        # Build draw-up queue: attacker first, then others, then defender
+        order = (
+            [g.attacker_idx]
+            + [i for i in range(len(g.players))
+               if i not in (g.attacker_idx, g.defender_idx)]
+            + [g.defender_idx]
+        )
+        draw_queue = []
+        for idx in order:
+            p = g.players[idx]
+            already_queued = sum(1 for qi, _ in draw_queue if qi == idx)
+            while (len(p.hand) + already_queued) < 6 and g.deck.remaining() > 0:
+                draw_queue.append((idx, g.deck.draw()))
+                already_queued += 1
+        if draw_queue:
+            self._state     = S_DRAWING
+            self._animating = True
+            self._draw_fly_next(draw_queue, 0)
         else:
-            self._round_timer = _ROUND_DELAY
-            self._state       = S_ROUND_OVER
+            self._start_round()
+
+    def _draw_fly_next(self, queue, i):
+        """Fly one draw-up card, add to hand on landing, then recurse until done."""
+        if i >= len(queue):
+            for p in self.game.players:
+                p.sort_hand(self.game.deck.trump)
+            self._animating = False
+            self._start_round()
+            return
+
+        p_idx, card = queue[i]
+        player      = self.game.players[p_idx]
+        src         = self._deck_centre()
+
+        if p_idx == 0:
+            slot     = len(player.hand)
+            rect     = self._hand_rect(slot, slot + 1)
+            dst      = (rect.x + CARD_W // 2, rect.y + CARD_H // 2)
+            card_key = str(card)          # face-up for player
+        else:
+            slot     = len(player.hand)
+            dst      = self._bot_card_centre(slot, slot + 1)
+            card_key = "back"             # face-down for bot
+
+        def on_land(p=player, c=card, qi=i):
+            p.hand.append(c)
+            self._draw_fly_next(queue, qi + 1)
+
+        self._fly_card(
+            card_key, src, dst,
+            duration=14,
+            src_angle=random.uniform(-8, 8),
+            dst_angle=0.0,
+            on_done=on_land,
+        )
 
     # ── events ────────────────────────────────────────────────────────────────
 
@@ -475,7 +530,7 @@ class GameScreen:
                 if not self._animating:
                     self._on_confirm()
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            if not self._animating:
+            if not self._animating and self._state not in (S_DEALING, S_DRAWING):
                 self._on_click(event.pos)
         return None
 
@@ -519,7 +574,8 @@ class GameScreen:
                 _, dfn = self._vis_table[pi]
                 self._vis_table[pi] = (cs, dfn)
                 self._animating = False
-                self._after_attack()
+                # Start/reset the commit window — player can still add more cards
+                self._attack_commit_timer = _ATTACK_COMMIT_DELAY
             self._fly_card(card_str, src, dst, on_done=on_land)
 
         elif self._state == S_HUMAN_DEFEND:
@@ -527,7 +583,6 @@ class GameScreen:
                 taken = g.table.all_cards()
                 g.players[0].hand.extend(taken)
                 g.players[0].sort_hand(trump)
-                g._draw_up()
                 g._advance_roles(defender_took=True)
                 self._finish_round(defender_took=True)
                 return
@@ -584,6 +639,12 @@ class GameScreen:
             self._round_timer -= 1
             if self._round_timer <= 0:
                 self._start_round()
+
+        # Attack commit window — count down after last attack card lands
+        if self._attack_commit_timer > 0 and not self._animating:
+            self._attack_commit_timer -= 1
+            if self._attack_commit_timer <= 0:
+                self._after_attack()
 
         if self._status_fade > 0:
             self._status_fade -= 1
@@ -716,6 +777,34 @@ class GameScreen:
             surf.set_alpha(self._status_alpha)
             av_y = 20 + CARD_H + 36
             t.blit(surf, (cx - surf.get_width() // 2, av_y + 40))
+
+        # Attack commit countdown arc — shows remaining window to add cards
+        if self._attack_commit_timer > 0 and not self._animating:
+            ratio   = self._attack_commit_timer / _ATTACK_COMMIT_DELAY
+            r       = 18
+            arc_y   = H // 2 - CARD_H // 2 - 48
+            rect    = pygame.Rect(cx - r, arc_y - r, r * 2, r * 2)
+            # background ring
+            pygame.draw.circle(t, PURPLE_DIM, (cx, arc_y), r, width=3)
+            # coloured arc — green to red as time runs out
+            g_val   = int(200 * ratio)
+            r_val   = int(200 * (1 - ratio))
+            col     = (r_val, g_val, 60)
+            end_ang = -90 + (1 - ratio) * 360
+            start   = math.radians(-90)
+            end     = math.radians(end_ang)
+            # draw arc as polyline
+            steps   = max(2, int(ratio * 32))
+            pts     = []
+            for s in range(steps + 1):
+                a = math.radians(-90 + ratio * 360 * s / steps)
+                pts.append((cx + int(r * math.cos(a)), arc_y + int(r * math.sin(a))))
+            if len(pts) >= 2:
+                pygame.draw.lines(t, col, False, pts, 3)
+            # label inside
+            secs = math.ceil(self._attack_commit_timer / 60)
+            lbl  = f.render(str(secs), False, col)
+            t.blit(lbl, (cx - lbl.get_width() // 2, arc_y - lbl.get_height() // 2))
 
         if self._message:
             msg = f.render(self._message, False, TEXT_DIM)
