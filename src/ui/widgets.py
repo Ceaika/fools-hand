@@ -5,6 +5,7 @@ from .constants import (
     NEON, NEON_DARK, NEON_GLOW, PURPLE, PURPLE_DIM,
     TEXT_MAIN, BTN_W, BTN_H, BTN_RADIUS, BG2
 )
+from . import audio
 
 
 class Button:
@@ -26,6 +27,7 @@ class Button:
     def handle_event(self, event: pygame.event.Event) -> bool:
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             if self.rect.collidepoint(event.pos):
+                audio.play("menu_click")
                 return True
         return False
 

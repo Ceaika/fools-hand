@@ -9,6 +9,7 @@ from .constants import (
     BTN_W, BTN_H, BTN_RADIUS,
 )
 from .widgets import Button
+from . import audio
 
 _AMBER      = (220, 140, 20)
 _AMBER_DARK = (160, 100, 10)
@@ -52,6 +53,7 @@ class PlaySelectScreen:
             if self._back_btn.handle_event(event):
                 return "back", self._back_btn.rect.copy()
             if self._sp_rect.collidepoint(event.pos):
+                audio.play("menu_click")
                 return "singleplayer", self._sp_rect.copy()
         return None, None
 

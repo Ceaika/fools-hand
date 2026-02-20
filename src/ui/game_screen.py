@@ -5,6 +5,7 @@ import random
 import pygame
 from ..core.game import _ai_choose_attack, _ai_choose_defence, _ai_should_stop_attacking
 from ..core.move_validator import MoveValidator
+from . import audio
 from .constants import (
     WIDTH, HEIGHT,
     BG, NEON, NEON_GLOW, NEON_DARK, PURPLE, PURPLE_DIM,
@@ -229,7 +230,6 @@ class GameScreen:
             self._deal_i += 1
             self._deal_fly_next()
 
-        # fly card BACK during the deal (looks like dealing)
         self._fly_card(
             "back",
             src,
@@ -237,7 +237,8 @@ class GameScreen:
             duration=16,
             src_angle=random.uniform(-12, 12),
             dst_angle=random.uniform(-6, 6),
-            on_done=on_land
+            on_done=on_land,
+            sound="card_take",
         )
 
     # ── animation helpers ─────────────────────────────────────────────────────
@@ -246,10 +247,17 @@ class GameScreen:
         return pygame.transform.scale(surf, (CARD_W, CARD_H))
 
     def _fly_card(self, card_str, src, dst, duration=22,
-                  src_angle=0.0, dst_angle=0.0, on_done=None):
+                  src_angle=0.0, dst_angle=0.0, on_done=None, sound="card_place"):
+        """Launch a flying card. sound= is played when it lands (None to silence)."""
+        original_on_done = on_done
+        def wrapped_on_done():
+            if sound:
+                audio.play(sound)
+            if original_on_done:
+                original_on_done()
         surf = self._scaled(self._card_surf_by_str(card_str))
         self._flying.append(FlyingCard(surf, src, dst, duration,
-                                        src_angle, dst_angle, on_done))
+                                        src_angle, dst_angle, wrapped_on_done))
         self._animating = True
 
     def _scatter_table(self, pairs, on_all_done):
@@ -267,6 +275,7 @@ class GameScreen:
                 self._discards.pop(0)
             pending[0] -= 1
             if pending[0] <= 0:
+                audio.play("card_discard")
                 on_all_done()
 
         for i, (atk, dfn) in enumerate(pairs):
@@ -295,6 +304,7 @@ class GameScreen:
         def dec():
             pending[0] -= 1
             if pending[0] <= 0:
+                audio.play("card_take")
                 on_all_done()
 
         dst = (WIDTH // 2, HEIGHT - CARD_H // 2) if to_player else self._bot_hand_centre()
@@ -461,6 +471,7 @@ class GameScreen:
         if loser is not None:
             name = "You are" if loser == 0 else f"{g.players[loser].name} is"
             self._set(S_GAME_OVER, f"{name} the DURAK!")
+            audio.play("win" if loser != 0 else "loss")
             return
         # Build draw-up queue: attacker first, then others, then defender
         order = (
@@ -516,6 +527,7 @@ class GameScreen:
             src_angle=random.uniform(-8, 8),
             dst_angle=0.0,
             on_done=on_land,
+            sound="card_take",
         )
 
     # ── events ────────────────────────────────────────────────────────────────
@@ -525,11 +537,15 @@ class GameScreen:
             return "quit"
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
-                return "back"
+                return "pause"
             if event.key in (pygame.K_RETURN, pygame.K_SPACE):
                 if not self._animating:
                     self._on_confirm()
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            pause_rect = pygame.Rect(WIDTH - 76, 76, 40, 40)
+            if pause_rect.collidepoint(event.pos):
+                audio.play("menu_click")
+                return "pause"
             if not self._animating and self._state not in (S_DEALING, S_DRAWING):
                 self._on_click(event.pos)
         return None
@@ -557,6 +573,7 @@ class GameScreen:
                 self._invalid_card = card
                 self._invalid_tick = 40
                 self._message      = f"{card} — rank not on table"
+                audio.play("card_reject")
                 return
             hand_idx = g.players[0].hand.index(card)
             src_rect = self._hand_rect(hand_idx, len(g.players[0].hand))
@@ -595,6 +612,7 @@ class GameScreen:
                 self._invalid_card = card
                 self._invalid_tick = 40
                 self._message      = f"{card} can't beat {atk}"
+                audio.play("card_reject")
                 return
             hand_idx = g.players[0].hand.index(card)
             src_rect = self._hand_rect(hand_idx, len(g.players[0].hand))
