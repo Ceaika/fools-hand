@@ -55,7 +55,7 @@ class MainMenu:
         self._quit_fx   = float(quit_btn.rect.centerx)
         self._quit_fy   = float(quit_btn.rect.centery)
 
-        # credits panel — slides in from the left
+        # credits panel  slides in from the left
         self._panel_open   = False
         self._panel_x      = float(-_PANEL_W)   # current x (off screen when closed)
         self._credits_tab  = pygame.Rect(0, HEIGHT - 48, 110, 32)
@@ -87,12 +87,29 @@ class MainMenu:
             ("",           "  target audience"),
         ]
 
+        # ── intro animation ───────────────────────────────────────────────────
+        # Phase 1 (0–40):   black → scanline sweeps down revealing grid
+        # Phase 2 (40–90):  title flickers on like a neon sign
+        # Phase 3 (90–160): buttons spark in one by one with a left trail
+        # Phase 4 (160+):   fully interactive, intro done
+        self._intro_tick  = 0
+        self._intro_done  = False
+        import random as _r
+        self._flicker_seq = [_r.choice([0, 0, 80, 0, 255, 180, 255, 0, 255, 255])
+                             for _ in range(60)]
+
     # ── public ───────────────────────────────────────────────────────────────
 
     def handle_event_with_rect(self, event: pygame.event.Event) -> tuple:
         """Like handle_event but also returns the clicked button's rect."""
         if event.type == pygame.QUIT:
             return "quit", None
+        # Skip all interaction until intro is done; click/key skips it
+        if not self._intro_done:
+            if event.type in (pygame.MOUSEBUTTONDOWN, pygame.KEYDOWN):
+                self._intro_tick  = 999
+                self._intro_done  = True
+            return None, None
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             if self.x_btn.collidepoint(event.pos):
                 return "quit", self.x_btn
@@ -119,6 +136,10 @@ class MainMenu:
 
     def update(self) -> None:
         self.tick += 1
+        if not self._intro_done:
+            self._intro_tick += 1
+            if self._intro_tick >= 160:
+                self._intro_done = True
         mouse = pygame.mouse.get_pos()
         self._update_quit_btn(mouse)
         self._update_panel()
@@ -154,14 +175,34 @@ class MainMenu:
 
     def draw(self, surface: pygame.Surface | None = None) -> None:
         self._draw_target = surface if surface is not None else self.screen
-        t = self._draw_target
+        t  = self._draw_target
+        it = self._intro_tick
+
         t.fill(BG)
-        self._draw_bg_grid()
+
+        # Phase 1: scanline reveals the grid progressively
+        if it < 40:
+            reveal_y = int((it / 40) * HEIGHT)
+            self._draw_bg_grid(clip_y=reveal_y)
+        else:
+            self._draw_bg_grid()
+
         t.blit(self._vignette, (0, 0))
-        self._draw_title()
+
+        # Phase 1: scanline beam
+        if it < 40:
+            self._draw_scanline(it)
+
+        # Title: flickers on in phase 2
+        title_alpha = self._intro_title_alpha(it)
+        self._draw_title(alpha_override=title_alpha)
         self._draw_divider()
-        for btn, _ in self.buttons:
-            btn.draw(t)
+
+        # Buttons: spark in during phase 3
+        for i, (btn, _) in enumerate(self.buttons):
+            btn_alpha, btn_offset = self._intro_btn_state(it, i)
+            btn.draw(t, alpha_override=btn_alpha, x_offset=btn_offset)
+
         self._draw_x_button()
         self._draw_footer()
         self._draw_credits_panel()
@@ -271,6 +312,38 @@ class MainMenu:
         self._quit_btn.rect.centerx = int(self._quit_fx)
         self._quit_btn.rect.centery = int(self._quit_fy)
 
+    # ── intro helpers ─────────────────────────────────────────────────────────
+
+    def _draw_scanline(self, it: int) -> None:
+        t  = self._draw_target
+        sy = int((it / 40) * HEIGHT)
+        beam = pygame.Surface((WIDTH, 4), pygame.SRCALPHA)
+        beam.fill((180, 100, 255, 200))
+        t.blit(beam, (0, sy))
+        for trail, alpha in [(8, 60), (20, 25), (40, 10)]:
+            glow = pygame.Surface((WIDTH, trail), pygame.SRCALPHA)
+            glow.fill((140, 60, 220, alpha))
+            t.blit(glow, (0, max(0, sy - trail)))
+
+    def _intro_title_alpha(self, it: int) -> int:
+        if it < 40:
+            return 0
+        if it >= 90:
+            return 255
+        fi = min(it - 40, len(self._flicker_seq) - 1)
+        return self._flicker_seq[fi]
+
+    def _intro_btn_state(self, it: int, btn_idx: int) -> tuple:
+        start = 90 + btn_idx * 14
+        if it < start:
+            return 0, -60
+        elapsed = it - start
+        if elapsed >= 20:
+            return 255, 0
+        progress = elapsed / 20
+        ease     = 1 - (1 - progress) ** 3
+        return int(255 * ease), int(-60 * (1 - ease))
+
     # ── visual helpers ────────────────────────────────────────────────────────
 
     def _make_vignette(self) -> pygame.Surface:
@@ -285,15 +358,18 @@ class MainMenu:
             pygame.draw.circle(surf, (0, 0, 0, alpha), (cx, cy), r)
         return surf
 
-    def _draw_bg_grid(self) -> None:
+    def _draw_bg_grid(self, clip_y: int = None) -> None:
         grid_col = (30, 15, 50)
         spacing  = 40
+        max_y    = clip_y if clip_y is not None else HEIGHT
         for x in range(0, WIDTH, spacing):
-            pygame.draw.line(self._draw_target, grid_col, (x, 0), (x, HEIGHT))
-        for y in range(0, HEIGHT, spacing):
+            pygame.draw.line(self._draw_target, grid_col, (x, 0), (x, max_y))
+        for y in range(0, max_y, spacing):
             pygame.draw.line(self._draw_target, grid_col, (0, y), (WIDTH, y))
 
-    def _draw_title(self) -> None:
+    def _draw_title(self, alpha_override: int = 255, x_offset: int = 0) -> None:
+        if alpha_override == 0:
+            return
         pulse      = abs(math.sin(self.tick * 0.03)) * 6
         title_font = self.fonts["title"]
         ty         = HEIGHT // 4 - 30
@@ -301,31 +377,35 @@ class MainMenu:
         display = "".join(self._decode_text) if (self._decoding or self._title_decoded) else _TITLE_NORMAL
         colour  = NEON_GLOW if self._title_decoded else TEXT_MAIN
 
-        for offset, alpha in [(10, 30), (6, 60), (3, 100)]:
+        tx_base = WIDTH // 2
+
+        for offset, glow_alpha in [(10, 30), (6, 60), (3, 100)]:
             glow = title_font.render(display, False, NEON_GLOW)
-            glow.set_alpha(alpha)
-            gx = WIDTH // 2 - glow.get_width() // 2
+            glow.set_alpha(int(glow_alpha * alpha_override / 255))
+            gx = tx_base - glow.get_width() // 2 + x_offset
             self._draw_target.blit(glow, (gx - offset // 2, ty + int(pulse)))
             self._draw_target.blit(glow, (gx + offset // 2, ty + int(pulse)))
 
         title = title_font.render(display, False, colour)
-        tx    = WIDTH // 2 - title.get_width() // 2
+        title.set_alpha(alpha_override)
+        tx    = tx_base - title.get_width() // 2 + x_offset
         self._draw_target.blit(title, (tx, ty + int(pulse)))
 
-        # store rect for click detection
         self._title_rect = pygame.Rect(tx, ty + int(pulse),
                                        title.get_width(), title.get_height())
 
         uw = title.get_width()
-        ux = WIDTH // 2 - uw // 2
+        ux = tx
         uy = ty + title.get_height() + 10 + int(pulse)
-        line_col = NEON_GLOW if self._title_decoded else NEON
-        pygame.draw.rect(self._draw_target, line_col,  (ux, uy,     uw, 3))
-        pygame.draw.rect(self._draw_target, NEON_GLOW, (ux, uy - 1, uw, 1))
+        line_col  = NEON_GLOW if self._title_decoded else NEON
+        line_surf = pygame.Surface((uw, 3), pygame.SRCALPHA)
+        line_surf.fill((*line_col, alpha_override))
+        self._draw_target.blit(line_surf, (ux, uy))
 
         sub_text = "A  DURAK  CARD  GAME" if not self._title_decoded else "the original name"
         sub      = self.fonts["sub"].render(sub_text, False, TEXT_DIM)
-        sx       = WIDTH // 2 - sub.get_width() // 2
+        sub.set_alpha(alpha_override)
+        sx       = tx_base - sub.get_width() // 2 + x_offset
         self._draw_target.blit(sub, (sx, uy + 14))
 
     def _draw_divider(self) -> None:
@@ -346,8 +426,8 @@ class MainMenu:
 
     def _draw_footer(self) -> None:
         small = self.fonts["small"]
-        ver   = small.render("pre-release", False, TEXT_DIM)
+        ver   = small.render("demo-release. DO NOT DISTRIBUTE", False, TEXT_DIM)
         self._draw_target.blit(ver, (12, HEIGHT - ver.get_height() - 10))
-        rights = small.render("(c) 2025 Dumitru Ceaicovschi", False, TEXT_DIM)
+        rights = small.render("(c) 2026 Dumitru Ceaicovschi", False, TEXT_DIM)
         self._draw_target.blit(rights, (WIDTH - rights.get_width() - 12,
                                    HEIGHT - rights.get_height() - 10))

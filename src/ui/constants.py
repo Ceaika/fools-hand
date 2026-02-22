@@ -9,26 +9,26 @@ TITLE  = "Fool's Hand"
 # ── palette ───────────────────────────────────────────────────────────────────
 BLACK      = (0,   0,   0)
 WHITE      = (255, 255, 255)
-BG         = (12,  8,   20)    # deep purple-black
-BG2        = (20,  13,  35)    # slightly lighter for panels
+BG         = (12,  8,   20)
+BG2        = (20,  13,  35)
 
-NEON       = (255, 50,  120)   # hot pink/red — primary accent (Balatro)
-NEON_DARK  = (160, 20,  70)    # dimmed neon for hover fill
-NEON_GLOW  = (255, 80,  150)   # lighter for glow/bloom edge
+NEON       = (255, 50,  120)
+NEON_DARK  = (160, 20,  70)
+NEON_GLOW  = (255, 80,  150)
 
-GOLD       = (255, 200, 80)    # secondary accent — highlights
-PURPLE     = (90,  50,  140)   # mid purple for borders/dividers
-PURPLE_DIM = (45,  25,  70)    # dark purple for subtle elements
+GOLD       = (255, 200, 80)
+PURPLE     = (90,  50,  140)
+PURPLE_DIM = (45,  25,  70)
 
-TEXT_MAIN  = (240, 230, 255)   # slightly purple-tinted white
-TEXT_DIM   = (110, 90,  140)   # muted purple-grey
+TEXT_MAIN  = (240, 230, 255)
+TEXT_DIM   = (110, 90,  140)
 
 # ── card colours ─────────────────────────────────────────────────────────────
-CARD_BG     = (235, 225, 245)  # pale purple-white face
-CARD_BACK   = (40,  20,  80)   # deep purple back
+CARD_BG     = (235, 225, 245)
+CARD_BACK   = (40,  20,  80)
 CARD_BORDER = (90,  50,  140)
-CARD_RED    = (220, 40,  100)  # neon-ish red for hearts/diamonds
-CARD_BLACK  = (180, 160, 220)  # soft purple for clubs/spades
+CARD_RED    = (220, 40,  100)
+CARD_BLACK  = (180, 160, 220)
 
 # ── layout ────────────────────────────────────────────────────────────────────
 BTN_W      = 340

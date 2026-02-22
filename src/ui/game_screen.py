@@ -16,7 +16,7 @@ from .constants import (
 
 _BOT_DELAY    = 90
 _ROUND_DELAY  = 90
-_ATTACK_COMMIT_DELAY = 180   # ~3 seconds at 60fps — window to add more attack cards
+_ATTACK_COMMIT_DELAY = 180   # ~3 seconds at 60fps  window to add more attack cards
 
 S_HUMAN_ATTACK = "human_attack"
 S_HUMAN_DEFEND = "human_defend"
@@ -105,7 +105,7 @@ class GameScreen:
         self._round_timer  = 0
         self._attack_commit_timer = 0   # ticks after last attack card lands before defence begins
 
-        # visual table state — list of (atk_str, dfn_str|None)
+        # visual table state  list of (atk_str, dfn_str|None)
         # updated incrementally as cards land, so settled cards always show
         self._vis_table: list[tuple] = []
 
@@ -127,6 +127,20 @@ class GameScreen:
         self._shuffle_tick = 0
         self._deal_queue   = []
         self._deal_i       = 0
+
+        # --- trump reveal animation state ---
+        self._trump_reveal_phase = 0
+        self._reveal_tick        = 0
+        self._trump_tucked       = False
+        self._reveal_surf_front  = None
+        self._reveal_surf_back   = None
+        self._reveal_pos         = (0, 0)
+        self._reveal_x_scale     = 1.0
+
+        # --- role reveal animation state ---
+        self._role_reveal_active = False
+        self._role_tick          = 0
+        self._role_final         = ""   # "ATTACKING" or "DEFENDING"
 
         # If the game was started with setup_no_deal(), hands are empty and we animate dealing.
         if all(len(p.hand) == 0 for p in self.game.players):
@@ -165,6 +179,13 @@ class GameScreen:
         y = HEIGHT // 2
         return (x, y)
 
+    def _trump_tucked_pos(self):
+        """Centre position of the trump card when tucked sideways under the deck.
+        Offset right so it clearly peeks out from under the deck stack."""
+        x = 110 + CARD_W + CARD_H // 2 - 10   # right edge of deck + half the rotated card width
+        y = HEIGHT // 2
+        return (x, y)
+
     def _bot_card_centre(self, idx, total, W=None):
         gap     = 6
         W = W if W is not None else WIDTH
@@ -178,20 +199,19 @@ class GameScreen:
         """Shuffle-while-dealing intro. Requires Game.setup_no_deal()."""
         g = self.game
 
-        # lock input via _animating and show status
         self._set(S_DEALING, "")
         self._animating    = True
         self._shuffling    = True
         self._shuffle_tick = 0
 
-        # Deal 6 cards each, in 3 rounds of 2 (same pattern as typical setup)
+        # Build the deal order (player indices only  cards stay in deck until each flies)
         self._deal_queue = []
         players = list(range(len(g.players)))
         for _ in range(3):
             for p_idx in players:
                 for _ in range(2):
-                    if g.deck.remaining() > 0:
-                        self._deal_queue.append((p_idx, g.deck.draw()))
+                    if g.deck.remaining() > 1:   # leave the trump card (bottom) in deck
+                        self._deal_queue.append(p_idx)
 
         self._deal_i = 0
         self._deal_fly_next()
@@ -200,30 +220,28 @@ class GameScreen:
         g = self.game
 
         if self._deal_i >= len(self._deal_queue):
-            # finish up and begin the actual round
             for p in g.players:
                 p.sort_hand(g.deck.trump)
+            g._assign_first_attacker()   # lowest trump card holder attacks first
             self._animating = False
-            self._shuffling = False
-            self._start_round()
+            self._begin_trump_reveal()
             return
 
-        p_idx, card = self._deal_queue[self._deal_i]
-        player      = g.players[p_idx]
+        p_idx  = self._deal_queue[self._deal_i]
+        player = g.players[p_idx]
+        card   = g.deck.draw()   # draw one card now, deck shrinks visibly
 
         src = self._deck_centre()
 
         if p_idx == 0:
-            # human hand landing slot (based on where it will be after append)
-            slot = len(player.hand)
+            slot        = len(player.hand)
             total_after = slot + 1
-            rect = self._hand_rect(slot, total_after)
-            dst  = (rect.x + CARD_W // 2, rect.y + CARD_H // 2)
+            rect        = self._hand_rect(slot, total_after)
+            dst         = (rect.x + CARD_W // 2, rect.y + CARD_H // 2)
         else:
-            # bot hand landing slot (based on your draw layout)
-            slot = len(player.hand)
+            slot        = len(player.hand)
             total_after = slot + 1
-            dst  = self._bot_card_centre(slot, total_after)
+            dst         = self._bot_card_centre(slot, total_after)
 
         def on_land(p=player, c=card):
             p.hand.append(c)
@@ -231,15 +249,258 @@ class GameScreen:
             self._deal_fly_next()
 
         self._fly_card(
-            "back",
-            src,
-            dst,
+            "back", src, dst,
             duration=16,
             src_angle=random.uniform(-12, 12),
             dst_angle=random.uniform(-6, 6),
             on_done=on_land,
             sound="card_take",
         )
+
+    # ── trump reveal animation ────────────────────────────────────────────────
+
+    # Phase timings (in ticks)
+    _REVEAL_FLY_IN   = 30   # deck → centre
+    _REVEAL_SPIN     = 50   # dramatic spin + flip at centre
+    _REVEAL_HOLD     = 40   # hold face-up so player can read it
+    _REVEAL_FLY_OUT  = 35   # centre → under deck
+
+    def _begin_trump_reveal(self):
+        g          = self.game
+        trump_card = g.deck.peek_bottom()
+        trump_str  = str(trump_card)
+
+        self._reveal_surf_front  = self._scaled(self._card_surf_by_str(trump_str))
+        self._reveal_surf_back   = self._scaled(self._get_back_surf((CARD_W, CARD_H)))
+        self._reveal_tick        = 0
+        self._trump_reveal_phase = 1
+        self._animating          = True
+        # _shuffling stays True from the deal phase  we stop it when card tucks
+
+    def _update_trump_reveal(self):
+        if self._trump_reveal_phase == 0:
+            return
+
+        self._reveal_tick += 1
+        phase = self._trump_reveal_phase
+
+        deck_pos   = self._deck_centre()
+        centre_pos = (WIDTH // 2, HEIGHT // 2)
+
+        if phase == 1:
+            # fly from deck to centre
+            if self._reveal_tick >= self._REVEAL_FLY_IN:
+                self._trump_reveal_phase = 2
+                self._reveal_tick = 0
+
+        elif phase == 2:
+            # spin + flip
+            if self._reveal_tick >= self._REVEAL_SPIN + self._REVEAL_HOLD:
+                self._trump_reveal_phase = 3
+                self._reveal_tick = 0
+
+        elif phase == 3:
+            # fly back to deck, rotate to 90°
+            if self._reveal_tick >= self._REVEAL_FLY_OUT:
+                self._trump_reveal_phase = 0
+                self._trump_tucked       = True
+                self._shuffling          = False
+                self._animating          = True   # keep input locked during role reveal
+                self._begin_role_reveal()
+
+    # ── role reveal animation ─────────────────────────────────────────────────
+
+    _ROLE_CYCLE_TICKS = 160   # ~2.7s cycling through roles
+    _ROLE_HOLD_TICKS  = 80    # ~1.3s hold on final role
+    _ROLE_FADE_TICKS  = 60    # ~1s grow + fade out
+    _ROLE_CYCLE_SPEED = 14    # ticks per role flip  slower so it's readable
+
+    def _begin_role_reveal(self):
+        g = self.game
+        self._role_final        = "ATTACKING" if g.attacker_idx == 0 else "DEFENDING"
+        self._role_tick         = 0
+        self._role_reveal_active = True
+
+    def _update_role_reveal(self):
+        if not self._role_reveal_active:
+            return
+        self._role_tick += 1
+        total = self._ROLE_CYCLE_TICKS + self._ROLE_HOLD_TICKS + self._ROLE_FADE_TICKS
+        if self._role_tick >= total:
+            self._role_reveal_active = False
+            self._animating          = False
+            self._start_round()
+
+    def _draw_role_reveal(self, t):
+        if not self._role_reveal_active:
+            return
+
+        W, H   = t.get_width(), t.get_height()
+        cx, cy = W // 2, H // 2
+        tick   = self._role_tick
+
+        roles     = ["ATTACKING", "DEFENDING"]
+        cycle_end = self._ROLE_CYCLE_TICKS
+        hold_end  = cycle_end + self._ROLE_HOLD_TICKS
+        fade_end  = hold_end  + self._ROLE_FADE_TICKS
+
+        # Determine which role word to show
+        if tick < cycle_end:
+            # Pre-compute flip points: intervals grow from 8 → 30 ticks (slot machine slowdown)
+            # Build the list of cumulative flip times
+            flip_times = []
+            t_acc      = 0
+            interval   = 8
+            while t_acc < cycle_end - 20:
+                t_acc    += interval
+                flip_times.append(t_acc)
+                interval  = min(30, int(interval * 1.18))
+
+            # Count how many flips have happened so far
+            flips_done = sum(1 for ft in flip_times if tick >= ft)
+            idx        = flips_done % 2
+            word       = roles[idx]
+
+            # Snap to final role in the last 20 ticks
+            if tick >= cycle_end - 20:
+                word = self._role_final
+        else:
+            word = self._role_final
+
+        # Scale: normal during cycle/hold, grows during fade
+        if tick < hold_end:
+            scale  = 1.0
+            alpha  = 255
+        else:
+            fade_t = (tick - hold_end) / self._ROLE_FADE_TICKS
+            scale  = 1.0 + fade_t * 0.6       # grows to 1.6×
+            alpha  = int(255 * (1.0 - fade_t))  # fades out
+
+        if alpha <= 0:
+            return
+
+        is_attack  = (word == "ATTACKING")
+        word_col   = (100, 220, 255) if is_attack else (255, 160, 80)   # blue=attack, orange=defend
+        label_col  = TEXT_DIM
+
+        title_f = self.fonts["title"]
+        role_f  = self.fonts["title"]
+
+        # "YOU ARE" label
+        you_surf = title_f.render("YOU ARE", False, label_col)
+        you_surf.set_alpha(alpha)
+
+        # Role word  render at base size then scale
+        role_surf_base = role_f.render(word, False, word_col)
+        if scale != 1.0:
+            new_w = max(1, int(role_surf_base.get_width()  * scale))
+            new_h = max(1, int(role_surf_base.get_height() * scale))
+            role_surf = pygame.transform.scale(role_surf_base, (new_w, new_h))
+        else:
+            role_surf = role_surf_base
+        role_surf.set_alpha(alpha)
+
+        # Neon glow behind role word
+        glow_surf_base = role_f.render(word, False, NEON_GLOW)
+        if scale != 1.0:
+            gw = max(1, int(glow_surf_base.get_width()  * scale))
+            gh = max(1, int(glow_surf_base.get_height() * scale))
+            glow_surf = pygame.transform.scale(glow_surf_base, (gw, gh))
+        else:
+            glow_surf = glow_surf_base
+        glow_surf.set_alpha(min(alpha, int(120 * (1 - max(0, tick - hold_end) / self._ROLE_FADE_TICKS))))
+
+        gap    = 12
+        total_h = you_surf.get_height() + gap + role_surf.get_height()
+        you_y   = cy - total_h // 2
+        role_y  = you_y + you_surf.get_height() + gap
+
+        # Dim overlay so text pops
+        overlay = pygame.Surface((W, H), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, min(alpha // 2, 120)))
+        t.blit(overlay, (0, 0))
+
+        # Glow passes
+        for off, a_mult in [(6, 0.15), (3, 0.35)]:
+            g2 = glow_surf.copy()
+            g2.set_alpha(int(glow_surf.get_alpha() * a_mult))
+            t.blit(g2, (cx - glow_surf.get_width() // 2 - off, role_y))
+            t.blit(g2, (cx - glow_surf.get_width() // 2 + off, role_y))
+
+        t.blit(glow_surf, (cx - glow_surf.get_width() // 2, role_y))
+        t.blit(you_surf,  (cx - you_surf.get_width()  // 2, you_y))
+        t.blit(role_surf, (cx - role_surf.get_width() // 2, role_y))
+
+
+        """Phase 3 only  draws card travelling back under the deck stack."""
+        if self._trump_reveal_phase != 3:
+            return
+        tuck_pos   = self._trump_tucked_pos()
+        centre_pos = (WIDTH // 2, HEIGHT // 2)
+        progress   = min(self._reveal_tick / self._REVEAL_FLY_OUT, 1.0)
+        ease_p     = _ease_out(progress)
+        x = centre_pos[0] + (tuck_pos[0] - centre_pos[0]) * ease_p
+        y = centre_pos[1] + (tuck_pos[1] - centre_pos[1]) * ease_p
+        angle = progress * 90   # linear rotation so final angle matches tucked state exactly
+        self._blit_reveal_card(t, self._reveal_surf_front, x, y, angle, 1.0)
+
+    def _draw_trump_reveal(self, t, under_deck=False):
+        """Draw the trump reveal card animation.
+        under_deck=True: only draws phase 3 (card returns under deck).
+        under_deck=False: only draws phases 1+2 (card above deck)."""
+        phase = self._trump_reveal_phase
+
+        if under_deck:
+            if phase != 3:
+                return
+            tuck_pos   = self._trump_tucked_pos()
+            centre_pos = (WIDTH // 2, HEIGHT // 2)
+            progress   = min(self._reveal_tick / self._REVEAL_FLY_OUT, 1.0)
+            ease_p     = _ease_out(progress)
+            x = centre_pos[0] + (tuck_pos[0] - centre_pos[0]) * ease_p
+            y = centre_pos[1] + (tuck_pos[1] - centre_pos[1]) * ease_p
+            angle = progress * 90
+            self._blit_reveal_card(t, self._reveal_surf_front, x, y, angle, 1.0)
+            return
+
+        if phase not in (1, 2):
+            return
+
+        deck_pos   = self._deck_centre()
+        centre_pos = (WIDTH // 2, HEIGHT // 2)
+        tick       = self._reveal_tick
+
+        if phase == 1:
+            progress = _ease_out(min(tick / self._REVEAL_FLY_IN, 1.0))
+            x = deck_pos[0] + (centre_pos[0] - deck_pos[0]) * progress
+            y = deck_pos[1] + (centre_pos[1] - deck_pos[1]) * progress
+            angle = (1 - progress) * 15
+            self._blit_reveal_card(t, self._reveal_surf_back, x, y, angle, 1.0)
+
+        elif phase == 2:
+            x, y   = centre_pos
+            spin_t = min(tick / self._REVEAL_SPIN, 1.0)
+            angle  = math.sin(spin_t * math.pi * 2.5) * 25 * (1 - spin_t)
+            flip_t = min(tick / (self._REVEAL_SPIN * 0.7), 1.0)
+            if flip_t < 0.5:
+                x_scale = 1.0 - _ease_out(flip_t / 0.5)
+                surf    = self._reveal_surf_back
+            else:
+                x_scale = _ease_out((flip_t - 0.5) / 0.5)
+                surf    = self._reveal_surf_front
+            self._blit_reveal_card(t, surf, x, y, angle, x_scale)
+
+    def _blit_reveal_card(self, t, surf, x, y, angle, x_scale):
+        """Blit a card surface at (x,y) with rotation and optional x squash."""
+        if x_scale < 0.02:
+            return
+        s = surf
+        if angle != 0:
+            s = pygame.transform.rotate(s, angle)
+        if x_scale < 0.99:
+            new_w = max(1, int(s.get_width() * x_scale))
+            s = pygame.transform.scale(s, (new_w, s.get_height()))
+        t.blit(s, (int(x) - s.get_width() // 2, int(y) - s.get_height() // 2))
 
     # ── animation helpers ─────────────────────────────────────────────────────
 
@@ -354,7 +615,7 @@ class GameScreen:
                            else _ai_choose_attack(attacker, g.table, trump)
 
             if card is None:
-                # bot passes — scatter what's on table
+                # bot passes  scatter what's on table
                 pairs = list(self._vis_table)
                 self._vis_table = []
                 if pairs:
@@ -394,7 +655,7 @@ class GameScreen:
             defence     = _ai_choose_defence(defender, attack_card, trump)
 
             if defence is None:
-                # bot takes cards — sweep to bot hand, then do animated draw-up
+                # bot takes cards  sweep to bot hand, then do animated draw-up
                 pairs = list(self._vis_table)
                 self._vis_table = []
                 taken = g.table.all_cards()
@@ -472,21 +733,36 @@ class GameScreen:
             name = "You are" if loser == 0 else f"{g.players[loser].name} is"
             self._set(S_GAME_OVER, f"{name} the DURAK!")
             audio.play("win" if loser != 0 else "loss")
+            audio.stop_music()
             return
-        # Build draw-up queue: attacker first, then others, then defender
+
+        # Build draw-up queue interleaved: attacker first, then defender, repeat
+        # so cards are handed out equally round by round (attacker gets priority each round)
         order = (
             [g.attacker_idx]
             + [i for i in range(len(g.players))
                if i not in (g.attacker_idx, g.defender_idx)]
             + [g.defender_idx]
         )
-        draw_queue = []
+
+        # How many cards each player needs
+        needs = {}
         for idx in order:
             p = g.players[idx]
-            already_queued = sum(1 for qi, _ in draw_queue if qi == idx)
-            while (len(p.hand) + already_queued) < 6 and g.deck.remaining() > 0:
-                draw_queue.append((idx, g.deck.draw()))
-                already_queued += 1
+            needs[idx] = max(0, 6 - len(p.hand))
+
+        # Interleave: one card per player per round until everyone is topped up
+        draw_queue = []
+        given      = {idx: 0 for idx in order}
+        any_dealt  = True
+        while any_dealt and g.deck.remaining() > 0:
+            any_dealt = False
+            for idx in order:
+                if given[idx] < needs[idx] and g.deck.remaining() > 0:
+                    draw_queue.append((idx, g.deck.draw()))
+                    given[idx] += 1
+                    any_dealt   = True
+
         if draw_queue:
             self._state     = S_DRAWING
             self._animating = True
@@ -572,7 +848,7 @@ class GameScreen:
             if not g.table.is_empty() and not validator.can_attack(card, g.table):
                 self._invalid_card = card
                 self._invalid_tick = 40
-                self._message      = f"{card} — rank not on table"
+                self._message      = f"{card}  rank not on table"
                 audio.play("card_reject")
                 return
             hand_idx = g.players[0].hand.index(card)
@@ -591,7 +867,7 @@ class GameScreen:
                 _, dfn = self._vis_table[pi]
                 self._vis_table[pi] = (cs, dfn)
                 self._animating = False
-                # Start/reset the commit window — player can still add more cards
+                # Start/reset the commit window  player can still add more cards
                 self._attack_commit_timer = _ATTACK_COMMIT_DELAY
             self._fly_card(card_str, src, dst, on_done=on_land)
 
@@ -635,10 +911,16 @@ class GameScreen:
 
     def update(self):
         self.tick += 1
-        if getattr(self, "_shuffling", False):
+        if getattr(self, "_shuffling", False) or self._trump_reveal_phase != 0:
             self._shuffle_tick += 1
         if self._invalid_tick > 0:
             self._invalid_tick -= 1
+
+        # Trump reveal animation
+        self._update_trump_reveal()
+
+        # Role reveal animation
+        self._update_role_reveal()
 
         for fc in self._flying:
             fc.update()
@@ -658,7 +940,7 @@ class GameScreen:
             if self._round_timer <= 0:
                 self._start_round()
 
-        # Attack commit window — count down after last attack card lands
+        # Attack commit window  count down after last attack card lands
         if self._attack_commit_timer > 0 and not self._animating:
             self._attack_commit_timer -= 1
             if self._attack_commit_timer <= 0:
@@ -688,7 +970,9 @@ class GameScreen:
         self._draw_bg_grid(t, W, H)
         self._draw_discards(t)
         self._draw_bot_hand(t, W, H)
+        self._draw_trump_reveal(t, under_deck=True)  # phase 3: behind deck
         self._draw_deck_and_trump(t, W, H)
+        self._draw_trump_reveal(t, under_deck=False)  # phases 1+2: above deck
         self._draw_table_cards(t, W, H)
         self._draw_status_bar(t, W, H)
         self._draw_player_hand(t, W, H, mouse)
@@ -698,6 +982,9 @@ class GameScreen:
 
         for fc in self._flying:
             fc.draw(t)
+
+        # Role reveal draws on top of everything
+        self._draw_role_reveal(t)
 
         if self._state == S_GAME_OVER:
             self._draw_game_over(t, W, H)
@@ -738,11 +1025,22 @@ class GameScreen:
     def _draw_deck_and_trump(self, t, W, H):
         remaining = self.game.deck.remaining()
         x, y      = 110, H // 2 - CARD_H // 2
+
+        # Draw tucked trump face-up rotated 90° under the deck  only once reveal is done
+        if getattr(self, "_trump_tucked", False) and remaining > 0 \
+                and self._trump_reveal_phase == 0:
+            trump_card = self.game.deck.peek_bottom()
+            trump_surf = self._scaled(self._card_surf_by_str(str(trump_card)))
+            rotated    = pygame.transform.rotate(trump_surf, 90)
+            tx, ty     = self._trump_tucked_pos()
+            t.blit(rotated, (tx - rotated.get_width() // 2,
+                              ty - rotated.get_height() // 2))
+
         for i in range(min(4, remaining)):
             t.blit(self._get_back_surf((CARD_W, CARD_H)), (x + i * 2, y - i * 2))
 
-        # shuffle flourish (only during intro deal)
-        if getattr(self, "_shuffling", False) and remaining > 0:
+        # shuffle flourish during intro deal and trump reveal
+        if getattr(self, "_shuffling", False) or self._trump_reveal_phase != 0:
             cx = x + CARD_W // 2
             cy = y + CARD_H // 2
             for k in range(5):
@@ -764,7 +1062,7 @@ class GameScreen:
         t.blit(cnt, (x + CARD_W // 2 - cnt.get_width() // 2, y + CARD_H + 6))
 
     def _draw_table_cards(self, t, W, H):
-        # Always draw _vis_table — it's the source of truth for settled cards
+        # Always draw _vis_table  it's the source of truth for settled cards
         pairs = self._vis_table
         if not pairs:
             return
@@ -796,7 +1094,7 @@ class GameScreen:
             av_y = 20 + CARD_H + 36
             t.blit(surf, (cx - surf.get_width() // 2, av_y + 40))
 
-        # Attack commit countdown arc — shows remaining window to add cards
+        # Attack commit countdown arc  shows remaining window to add cards
         if self._attack_commit_timer > 0 and not self._animating:
             ratio   = self._attack_commit_timer / _ATTACK_COMMIT_DELAY
             r       = 18
@@ -804,7 +1102,7 @@ class GameScreen:
             rect    = pygame.Rect(cx - r, arc_y - r, r * 2, r * 2)
             # background ring
             pygame.draw.circle(t, PURPLE_DIM, (cx, arc_y), r, width=3)
-            # coloured arc — green to red as time runs out
+            # coloured arc  green to red as time runs out
             g_val   = int(200 * ratio)
             r_val   = int(200 * (1 - ratio))
             col     = (r_val, g_val, 60)
@@ -872,21 +1170,47 @@ class GameScreen:
         r = pygame.Rect(20, 20, 150, 70)
         pygame.draw.rect(t, PURPLE_DIM, r, border_radius=8)
         pygame.draw.rect(t, PURPLE,     r, width=1, border_radius=8)
-        trump    = self.game.deck.trump
-        suit_sym = str(trump)
+
+        _all_suits   = ['♥', '♦', '♠', '♣']
+        name_map     = {'♥': 'HEARTS', '♦': 'DIAMONDS', '♠': 'SPADES', '♣': 'CLUBS'}
+        real_sym     = str(self.game.deck.trump)   # the actual trump suit symbol
+        f            = self.fonts["small"]
+        f_big        = self.fonts.get("body", f)
+
+        # During deal: cycle fast using shuffle_tick
+        # During reveal phases 1+2: cycle fast using reveal_tick
+        # During reveal phase 3: slow down and snap to real suit
+        # Otherwise: show real suit
+        phase = self._trump_reveal_phase
+        if getattr(self, "_shuffling", False) and phase == 0:
+            idx      = (self._shuffle_tick // 4) % 4
+            suit_sym = _all_suits[idx]
+        elif phase in (1, 2):
+            idx      = (self._reveal_tick // 4) % 4
+            suit_sym = _all_suits[idx]
+        elif phase == 3:
+            progress = self._reveal_tick / self._REVEAL_FLY_OUT
+            if progress < 0.6:
+                idx      = (self._reveal_tick // 6) % 4
+                suit_sym = _all_suits[idx]
+            else:
+                suit_sym = real_sym
+        else:
+            suit_sym = real_sym
+
         is_red   = suit_sym in ('♥', '♦')
         suit_col = (220, 60, 80) if is_red else TEXT_MAIN
-        f        = self.fonts["small"]
-        f_big    = self.fonts.get("body", f)
-        label    = f.render("TRUMP", False, TEXT_DIM)
+
+        label = f.render("TRUMP", False, TEXT_DIM)
         t.blit(label, (r.x + 10, r.y + 8))
-        sym     = f_big.render(suit_sym, False, suit_col)
+
+        sym      = f_big.render(suit_sym, False, suit_col)
         target_h = 36
         scale    = target_h / max(sym.get_height(), 1)
         sym_big  = pygame.transform.scale(sym,
             (max(1, int(sym.get_width() * scale)), target_h))
         t.blit(sym_big, (r.x + 10, r.y + 26))
-        name_map = {'♥': 'HEARTS', '♦': 'DIAMONDS', '♠': 'SPADES', '♣': 'CLUBS'}
+
         name = f.render(name_map.get(suit_sym, suit_sym), False, suit_col)
         t.blit(name, (r.x + 10 + sym_big.get_width() + 8,
                       r.y + 26 + (target_h - name.get_height()) // 2))
@@ -914,25 +1238,43 @@ class GameScreen:
         import os
         card_dir = os.path.join(os.path.dirname(__file__), 'assets', 'cards')
         images   = {}
-        rank_map = {'A':'ace','2':'2','3':'3','4':'4','5':'5','6':'6',
-                    '7':'7','8':'8','9':'9','10':'10','J':'jack','Q':'queen','K':'king'}
-        suit_map = {'♥':'hearts','♦':'diamonds','♠':'spades','♣':'clubs'}
+        suit_map = {'♥': 'hearts', '♦': 'diamonds', '♠': 'spades', '♣': 'clubs'}
+        rank_map = {
+            'A': 'ace', '2': '2', '3': '3', '4': '4', '5': '5', '6': '6',
+            '7': '7', '8': '8', '9': '9', '10': '10',
+            'J': 'jack', 'Q': 'queen', 'K': 'king',
+        }
         try:
             for suit_sym, suit_name in suit_map.items():
                 for rank_sym, rank_name in rank_map.items():
                     key  = f'{rank_sym}{suit_sym}'
                     path = os.path.join(card_dir, f'{rank_name}_of_{suit_name}.png')
-                    images[key] = pygame.image.load(path).convert_alpha()
-            images['back'] = pygame.image.load(
-                os.path.join(card_dir, 'back.png')).convert_alpha()
+                    if os.path.exists(path):
+                        images[key] = pygame.image.load(path).convert_alpha()
+            back_path = os.path.join(card_dir, 'back.png')
+            if os.path.exists(back_path):
+                images['back'] = pygame.image.load(back_path).convert_alpha()
         except Exception as e:
             print(f'[warn] card image load failed: {e}')
         return images
 
     def _card_surf_by_str(self, card_str):
-        base = self._cards.get(card_str.strip())
+        card_str = card_str.strip()
+        # Try direct lookup first (e.g. "6♥")
+        base = self._cards.get(card_str)
         if base:
-            return base
+            return pygame.transform.scale(base, (CARD_W, CARD_H))
+        # Fall back to parsing and drawing programmatically
+        from ..core.card import Card, Suit
+        suit_map = {'♥': Suit.HEARTS, '♦': Suit.DIAMONDS, '♠': Suit.SPADES, '♣': Suit.CLUBS}
+        for sym, suit in suit_map.items():
+            if card_str.endswith(sym):
+                rank = card_str[:-1]
+                try:
+                    return self._get_card_surf(Card(suit=suit, rank=rank), (CARD_W, CARD_H))
+                except Exception:
+                    pass
+        # Last resort fallback
         surf = pygame.Surface((CARD_W, CARD_H))
         surf.fill((220, 220, 220))
         return surf

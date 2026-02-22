@@ -11,10 +11,10 @@ from .menu import MainMenu
 from .play_select import PlaySelectScreen
 from .settings_screen import SettingsScreen
 from .pause_screen import PauseScreen
+from .tutorial_screen import TutorialScreen
 from .transition import ZoomTransition, CardSweepTransition
 from . import audio
 
-# Screens where music should be muffled
 _MUFFLED_SCREENS = {"play_select", "pause", "settings", "game_settings"}
 
 
@@ -63,6 +63,7 @@ def run() -> None:
     menu        = MainMenu(screen, fonts, vignette)
     play_select = PlaySelectScreen(screen, fonts, vignette)
     settings    = SettingsScreen(screen, fonts, vignette)
+    tutorial    = TutorialScreen(screen, fonts, vignette)
     pause       = PauseScreen(fonts)
     transition  = ZoomTransition()
     card_sweep  = CardSweepTransition()
@@ -72,6 +73,7 @@ def run() -> None:
         "menu":        menu,
         "play_select": play_select,
         "settings":    settings,
+        "tutorial":    tutorial,
     }
 
     def set_screen(name: str) -> None:
@@ -105,11 +107,9 @@ def run() -> None:
         set_screen("pause")
 
     def sweep_to_menu() -> None:
-        """Reverse card sweep from game/pause back to main menu."""
         nonlocal game_screen
         if card_sweep.busy:
             return
-        # src = current game view, dst = menu
         if game_screen:
             game_screen.draw(card_sweep.get_surface_src())
         menu.draw(card_sweep.get_surface_dst())
@@ -136,7 +136,6 @@ def run() -> None:
             if transition.busy or card_sweep.busy:
                 continue
 
-            # ── Main menu ─────────────────────────────────────────────────
             if current == "menu":
                 action, rect = menu.handle_event_with_rect(event)
                 if action == "quit":
@@ -144,10 +143,14 @@ def run() -> None:
                     sys.exit()
                 elif action == "play" and rect:
                     zoom_to("play_select", rect, direction=1)
+                elif action == "tutorial" and rect:
+                    # Fresh tutorial each time
+                    tutorial = TutorialScreen(screen, fonts, vignette)
+                    screens["tutorial"] = tutorial
+                    zoom_to("tutorial", rect, direction=1)
                 elif action == "settings" and rect:
                     go_settings_from_menu(rect)
 
-            # ── Play select ───────────────────────────────────────────────
             elif current == "play_select":
                 action, rect = play_select.handle_event_with_rect(event)
                 if action == "quit":
@@ -171,11 +174,29 @@ def run() -> None:
                         audio.play("transition_change")
                         card_sweep.start(on_switch=_on_switch)
 
-            # ── Settings (from menu) ──────────────────────────────────────
             elif current == "settings":
                 settings.handle_event(event)
 
-            # ── Game ──────────────────────────────────────────────────────
+            elif current == "tutorial":
+                action = tutorial.handle_event(event)
+                if action == "menu":
+                    zoom_to("menu", pygame.Rect(WIDTH // 2 - 60, HEIGHT // 2, 120, 40), direction=-1)
+                elif action == "play":
+                    if not card_sweep.busy:
+                        from .game_screen import GameScreen
+                        from ..core.game import Game
+                        game_obj = Game()
+                        game_obj.setup_no_deal(num_players=2)
+                        game_screen = GameScreen(screen, fonts, game_obj)
+                        screens["game"] = game_screen
+                        tutorial.draw(card_sweep.get_surface_src())
+                        game_screen.draw(card_sweep.get_surface_dst())
+                        def _on_switch_from_tut():
+                            set_screen("game")
+                            audio.play_music("in_game")
+                        audio.play("transition_change")
+                        card_sweep.start(on_switch=_on_switch_from_tut)
+
             elif current == "game":
                 action = game_screen.handle_event(event)
                 if action == "quit":
@@ -187,7 +208,6 @@ def run() -> None:
                 elif action == "pause":
                     set_screen("pause")
 
-            # ── Pause overlay ─────────────────────────────────────────────
             elif current == "pause":
                 action = pause.handle_event(event)
                 if action == "resume":
@@ -197,14 +217,11 @@ def run() -> None:
                 elif action == "main_menu":
                     sweep_to_menu()
 
-            # ── Settings (from pause) ─────────────────────────────────────
             elif current == "game_settings":
                 settings.handle_event(event)
 
-        # ── Audio update (crossfade tick) ─────────────────────────────────
         audio.update()
 
-        # ── Update ────────────────────────────────────────────────────────
         if not transition.busy and not card_sweep.busy:
             if current == "game":
                 game_screen.update()
@@ -215,7 +232,6 @@ def run() -> None:
             elif current in screens:
                 screens[current].update()
 
-        # ── Draw ──────────────────────────────────────────────────────────
         if transition.busy:
             transition.update()
             transition.draw(screen)

@@ -95,7 +95,7 @@ class Game:
         print(f"Trump card: {self.deck.peek_bottom()}")
 
     def setup_no_deal(self, num_players: int = 2) -> None:
-        """Same as setup() but leaves all hands empty — GameScreen deals via animation."""
+        """Same as setup() but leaves all hands empty  GameScreen deals via animation."""
         assert 2 <= num_players <= 6
         self.deck    = Deck.new_shuffled(seed=self.seed)
         self.players = [Player(name=f"Bot {i}" if i > 0 else "You")
@@ -119,10 +119,28 @@ class Game:
             self.players[idx].draw_to_six(self.deck)
             self.players[idx].sort_hand(self.deck.trump)
 
+    def _assign_first_attacker(self) -> None:
+        """Assign first attacker to the player holding the lowest trump card.
+        If nobody has a trump, pick randomly."""
+        import random as _random
+        trump = self.deck.trump
+        best_idx  = None
+        best_rank = None
+        for i, p in enumerate(self.players):
+            for card in p.hand:
+                if card.suit == trump:
+                    if best_rank is None or card.rank_value() < best_rank:
+                        best_rank = card.rank_value()
+                        best_idx  = i
+        if best_idx is None:
+            best_idx = _random.randrange(len(self.players))
+        self.attacker_idx = best_idx
+        self.defender_idx = (best_idx + 1) % len(self.players)
+
     def _advance_roles(self, defender_took: bool) -> None:
         n = len(self.players)
         if defender_took:
-            # Defender picks up; skip them — attacker stays, next attacker is after defender
+            # Defender picks up; skip them  attacker stays, next attacker is after defender
             self.attacker_idx = (self.defender_idx + 1) % n
         else:
             # Successful defence: defender becomes next attacker
@@ -212,7 +230,7 @@ class Game:
                         print("  You passed.")
                     break
                 if not first_attack and not validator.can_attack(card, self.table):
-                    print(f"  ✗ {card} — rank not on table.")
+                    print(f"  ✗ {card}  rank not on table.")
                     continue
             else:
                 self._thinking(attacker.name)
@@ -282,7 +300,7 @@ class Game:
                 if 1 <= choice <= len(attacker.hand):
                     card = attacker.hand[choice - 1]
                     if not validator.can_attack(card, self.table):
-                        print(f"  ✗ {card} — rank not on table.")
+                        print(f"  ✗ {card}  rank not on table.")
                     else:
                         attacker.remove_card(card)
                         self.table.add_attack(card)
