@@ -67,6 +67,11 @@ def run() -> None:
     tutorial    = TutorialScreen(screen, fonts, vignette)
     achievements = AchievementsScreen(screen, fonts, vignette)
     pause       = PauseScreen(fonts)
+
+    def _on_lang_change(code: str) -> None:
+        pause.rebuild_labels()
+
+    settings.set_on_lang_change(_on_lang_change)
     transition  = ZoomTransition()
     card_sweep  = CardSweepTransition()
     game_screen = None
