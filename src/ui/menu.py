@@ -6,8 +6,8 @@ import string
 import pygame
 from .constants import (
     WIDTH, HEIGHT,
-    BG, BG2, NEON, NEON_GLOW, PURPLE, PURPLE_DIM,
-    TEXT_MAIN, TEXT_DIM,
+    BG, BG2, NEON, NEON_GLOW, NEON_DARK, PURPLE, PURPLE_DIM,
+    GOLD, TEXT_MAIN, TEXT_DIM,
     BTN_W, BTN_H, BTN_GAP, BTN_RADIUS,
 )
 from .widgets import Button
@@ -39,10 +39,10 @@ class MainMenu:
 
         self.buttons: list[tuple[Button, str]] = []
         for i, (label, action) in enumerate([
-            ("PLAY",     "play"),
-            ("TUTORIAL", "tutorial"),
-            ("SETTINGS", "settings"),
-            ("QUIT",     "quit"),
+            ("PLAY",         "play"),
+            ("TUTORIAL",     "tutorial"),
+            ("SETTINGS",     "settings"),
+            ("QUIT",         "quit"),
         ]):
             y   = start_y + i * (BTN_H + BTN_GAP)
             btn = Button(cx, y, label, font=fonts["btn"])
@@ -55,12 +55,13 @@ class MainMenu:
         self._quit_fx   = float(quit_btn.rect.centerx)
         self._quit_fy   = float(quit_btn.rect.centery)
 
-        # credits panel  slides in from the left
+        # credits panel — slides in from the left
         self._panel_open   = False
         self._panel_x      = float(-_PANEL_W)   # current x (off screen when closed)
         self._credits_tab  = pygame.Rect(0, HEIGHT - 48, 110, 32)
 
         self.x_btn        = pygame.Rect(WIDTH - 48, 12, 36, 36)
+        self._trophy_btn  = pygame.Rect(WIDTH - 56, HEIGHT - 56, 40, 40)
         self._vignette    = vignette
         self._draw_target = self.screen
 
@@ -113,6 +114,8 @@ class MainMenu:
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             if self.x_btn.collidepoint(event.pos):
                 return "quit", self.x_btn
+            if self._trophy_btn.collidepoint(event.pos):
+                return "achievements", self._trophy_btn
             if self._title_rect.collidepoint(event.pos) and not self._decoding:
                 self._title_clicks += 1
                 if self._title_clicks >= _CLICKS_NEEDED and not self._title_decoded:
@@ -206,6 +209,7 @@ class MainMenu:
         self._draw_x_button()
         self._draw_footer()
         self._draw_credits_panel()
+        self._draw_trophy_btn()
 
     # ── credits panel ─────────────────────────────────────────────────────────
 
@@ -426,8 +430,44 @@ class MainMenu:
 
     def _draw_footer(self) -> None:
         small = self.fonts["small"]
-        ver   = small.render("demo-release. DO NOT DISTRIBUTE", False, TEXT_DIM)
+        ver   = small.render("demo-release | DO NOT REDISTRIBUTE", False, TEXT_DIM)
         self._draw_target.blit(ver, (12, HEIGHT - ver.get_height() - 10))
         rights = small.render("(c) 2026 Dumitru Ceaicovschi", False, TEXT_DIM)
         self._draw_target.blit(rights, (WIDTH - rights.get_width() - 12,
                                    HEIGHT - rights.get_height() - 10))
+
+    def _draw_trophy_btn(self) -> None:
+        from .achievements import get_global_stats, ACHIEVEMENTS
+        mouse    = pygame.mouse.get_pos()
+        hov      = self._trophy_btn.collidepoint(mouse)
+        stats    = get_global_stats()
+        count    = len(stats.unlocked)
+        total    = len(ACHIEVEMENTS)
+        is_full  = (count == total)
+
+        col_bg  = (40, 20, 70, 200)  if not hov else (60, 30, 100, 220)
+        col_bdr = GOLD               if is_full  else (NEON if hov else PURPLE_DIM)
+
+        panel = pygame.Surface((self._trophy_btn.width, self._trophy_btn.height),
+                                pygame.SRCALPHA)
+        pygame.draw.rect(panel, col_bg,  panel.get_rect(), border_radius=6)
+        pygame.draw.rect(panel, (*col_bdr, 220), panel.get_rect(),
+                         width=1, border_radius=6)
+        self._draw_target.blit(panel, self._trophy_btn.topleft)
+
+        # Trophy symbol
+        f   = self.fonts["btn"]
+        sym = f.render("*", False, GOLD if is_full else TEXT_DIM)
+        self._draw_target.blit(sym, (
+            self._trophy_btn.centerx - sym.get_width()  // 2,
+            self._trophy_btn.centery - sym.get_height() // 2 - 4,
+        ))
+
+        # Counter badge
+        f_sm  = self.fonts["small"]
+        badge = f_sm.render(f"{count}/{total}", False,
+                             GOLD if is_full else TEXT_DIM)
+        self._draw_target.blit(badge, (
+            self._trophy_btn.centerx - badge.get_width() // 2,
+            self._trophy_btn.bottom  - badge.get_height() - 2,
+        ))

@@ -13,10 +13,12 @@ from .constants import (
     CARD_BG, CARD_BACK, CARD_BORDER, CARD_RED, CARD_BLACK,
     CARD_W, CARD_H,
 )
+from .achievements import AchievementTracker, ACHIEVEMENTS, ACH
+from .achievement_toast import AchievementToast
 
 _BOT_DELAY    = 90
 _ROUND_DELAY  = 90
-_ATTACK_COMMIT_DELAY = 180   # ~3 seconds at 60fps  window to add more attack cards
+_ATTACK_COMMIT_DELAY = 180
 
 S_HUMAN_ATTACK = "human_attack"
 S_HUMAN_DEFEND = "human_defend"
@@ -24,9 +26,13 @@ S_PILE_ON      = "pile_on"
 S_BOT_THINKING = "bot_thinking"
 S_ROUND_OVER   = "round_over"
 S_GAME_OVER    = "game_over"
-
 S_DEALING      = "dealing"
-S_DRAWING      = "drawing"   # draw-up animation in progress
+S_DRAWING      = "drawing"
+
+# game-over result
+R_WIN  = "win"
+R_LOSS = "loss"
+R_TIE  = "tie"
 
 _STATUS = {
     S_DEALING:      "DEAL",
@@ -38,6 +44,11 @@ _STATUS = {
     S_ROUND_OVER:   "...",
     S_GAME_OVER:    "GAME OVER",
 }
+
+# Cheat code: first 12 digits of pi = 3 1 4 1 5 9 2 6 5 3 5 8
+_CHEAT_SEQUENCE = [pygame.K_3, pygame.K_1, pygame.K_4, pygame.K_1, pygame.K_5,
+                   pygame.K_9, pygame.K_2, pygame.K_6, pygame.K_5, pygame.K_3,
+                   pygame.K_5, pygame.K_8]
 
 
 def _ease_out(t: float) -> float:
@@ -105,7 +116,7 @@ class GameScreen:
         self._round_timer  = 0
         self._attack_commit_timer = 0   # ticks after last attack card lands before defence begins
 
-        # visual table state  list of (atk_str, dfn_str|None)
+        # visual table state — list of (atk_str, dfn_str|None)
         # updated incrementally as cards land, so settled cards always show
         self._vis_table: list[tuple] = []
 
@@ -121,6 +132,29 @@ class GameScreen:
         self._status_fade  = 0
 
         self._cards = self._load_card_images()
+
+        # ── achievement system ────────────────────────────────────────────────
+        self._ach_tracker = AchievementTracker()
+        self._ach_toast   = AchievementToast(fonts)
+        self._ach_tracker.add_listener(self._ach_toast.push)
+
+        # ── cheat code state ──────────────────────────────────────────────────
+        self._cheat_pos          = 0     # how many correct digits typed so far
+        self._cheat_queue        = []    # achievements queued to drip-feed
+        self._cheat_timer        = 0
+
+        # ── game-over state ───────────────────────────────────────────────────
+        self._result             = None  # R_WIN | R_LOSS | R_TIE
+        self._result_tick        = 0
+        self._falling_cards: list[dict] = []  # for loss screen animation
+        self._result_stats       = {}    # stats snapshot for end screen
+
+        # ── per-game stats ────────────────────────────────────────────────────
+        self._stat_rounds        = 0
+        self._stat_piles_taken   = 0
+        self._stat_biggest_pile  = 0
+        self._stat_trumps_played = 0
+        self._stat_passes        = 0
 
         # --- intro shuffle+deal animation state ---
         self._shuffling    = False
@@ -204,7 +238,7 @@ class GameScreen:
         self._shuffling    = True
         self._shuffle_tick = 0
 
-        # Build the deal order (player indices only  cards stay in deck until each flies)
+        # Build the deal order (player indices only — cards stay in deck until each flies)
         self._deal_queue = []
         players = list(range(len(g.players)))
         for _ in range(3):
@@ -222,8 +256,10 @@ class GameScreen:
         if self._deal_i >= len(self._deal_queue):
             for p in g.players:
                 p.sort_hand(g.deck.trump)
-            g._assign_first_attacker()   # lowest trump card holder attacks first
+            g._assign_first_attacker()
             self._animating = False
+            # Fire game-start achievement check now that hands are full
+            self._ach_tracker.on_game_start(g.players[0].hand, g.deck.trump)
             self._begin_trump_reveal()
             return
 
@@ -275,7 +311,7 @@ class GameScreen:
         self._reveal_tick        = 0
         self._trump_reveal_phase = 1
         self._animating          = True
-        # _shuffling stays True from the deal phase  we stop it when card tucks
+        # _shuffling stays True from the deal phase — we stop it when card tucks
 
     def _update_trump_reveal(self):
         if self._trump_reveal_phase == 0:
@@ -313,7 +349,7 @@ class GameScreen:
     _ROLE_CYCLE_TICKS = 160   # ~2.7s cycling through roles
     _ROLE_HOLD_TICKS  = 80    # ~1.3s hold on final role
     _ROLE_FADE_TICKS  = 60    # ~1s grow + fade out
-    _ROLE_CYCLE_SPEED = 14    # ticks per role flip  slower so it's readable
+    _ROLE_CYCLE_SPEED = 14    # ticks per role flip — slower so it's readable
 
     def _begin_role_reveal(self):
         g = self.game
@@ -390,7 +426,7 @@ class GameScreen:
         you_surf = title_f.render("YOU ARE", False, label_col)
         you_surf.set_alpha(alpha)
 
-        # Role word  render at base size then scale
+        # Role word — render at base size then scale
         role_surf_base = role_f.render(word, False, word_col)
         if scale != 1.0:
             new_w = max(1, int(role_surf_base.get_width()  * scale))
@@ -432,7 +468,7 @@ class GameScreen:
         t.blit(role_surf, (cx - role_surf.get_width() // 2, role_y))
 
 
-        """Phase 3 only  draws card travelling back under the deck stack."""
+        """Phase 3 only — draws card travelling back under the deck stack."""
         if self._trump_reveal_phase != 3:
             return
         tuck_pos   = self._trump_tucked_pos()
@@ -584,6 +620,12 @@ class GameScreen:
         self._vis_table = []
         self._animating = False
         self._flying.clear()
+        self._stat_rounds += 1
+        trump = g.deck.trump
+        player_trump_count = sum(1 for c in g.players[0].hand if c.is_trump(trump))
+        bot_hand_size      = len(g.players[1].hand)
+        self._ach_tracker.on_round_start(
+            self._stat_rounds, bot_hand_size, player_trump_count)
         if g.attacker_idx == 0:
             self._set(S_HUMAN_ATTACK, "")
         else:
@@ -615,7 +657,7 @@ class GameScreen:
                            else _ai_choose_attack(attacker, g.table, trump)
 
             if card is None:
-                # bot passes  scatter what's on table
+                # bot passes — scatter what's on table
                 pairs = list(self._vis_table)
                 self._vis_table = []
                 if pairs:
@@ -626,6 +668,8 @@ class GameScreen:
                 pair_idx = len(g.table.pairs)
                 attacker.remove_card(card)
                 g.table.add_attack(card)
+                if g.attacker_idx != 0:
+                    self._ach_tracker.on_bot_attack()
                 src = self._bot_hand_centre()
                 # total pairs after add
                 total = len(g.table.pairs)
@@ -655,7 +699,7 @@ class GameScreen:
             defence     = _ai_choose_defence(defender, attack_card, trump)
 
             if defence is None:
-                # bot takes cards  sweep to bot hand, then do animated draw-up
+                # bot takes cards — sweep to bot hand, then do animated draw-up
                 pairs = list(self._vis_table)
                 self._vis_table = []
                 taken = g.table.all_cards()
@@ -670,6 +714,7 @@ class GameScreen:
                 pair_idx = idx
                 defender.remove_card(defence)
                 g.table.add_defence(idx, defence)
+                self._ach_tracker.on_bot_defend_success()
                 src = self._bot_hand_centre()
                 total = len(g.table.pairs)
                 dst   = self._table_pos(pair_idx, total, True)
@@ -725,33 +770,42 @@ class GameScreen:
                 self._do_finish_round(False)
 
     def _do_finish_round(self, defender_took):
-        g = self.game
+        g     = self.game
+        trump = g.deck.trump
         if not defender_took:
+            # Successful defence — pile discarded
+            self._ach_tracker.on_round_defended_successfully()
             g._advance_roles(defender_took=False)
-        loser = g._check_game_over()
-        if loser is not None:
-            name = "You are" if loser == 0 else f"{g.players[loser].name} is"
-            self._set(S_GAME_OVER, f"{name} the DURAK!")
-            audio.play("win" if loser != 0 else "loss")
-            audio.stop_music()
+
+        # ── tie detection: both hands empty simultaneously ─────────────────
+        both_empty = all(len(p.hand) == 0 for p in g.players)
+        if both_empty:
+            self._trigger_game_over(R_TIE)
             return
 
-        # Build draw-up queue interleaved: attacker first, then defender, repeat
-        # so cards are handed out equally round by round (attacker gets priority each round)
-        order = (
-            [g.attacker_idx]
-            + [i for i in range(len(g.players))
-               if i not in (g.attacker_idx, g.defender_idx)]
-            + [g.defender_idx]
-        )
+        loser = g._check_game_over()
+        if loser is not None:
+            result = R_WIN if loser != 0 else R_LOSS
+            # You Had One Job: how many attacks were on table when player lost
+            if result == R_LOSS:
+                atk_count = len([pr for pr in g.table.pairs])
+                self._ach_tracker.on_final_round_attack_count(atk_count)
+            self._trigger_game_over(result)
+            return
 
-        # How many cards each player needs
-        needs = {}
-        for idx in order:
-            p = g.players[idx]
-            needs[idx] = max(0, 6 - len(p.hand))
+        # Deck-empty check
+        if g.deck.remaining() == 0 and not self._ach_tracker._deck_empty_fired:
+            all_trumps = ([c for c in g.players[0].hand if c.is_trump(trump)] +
+                          [c for c in g.players[1].hand if c.is_trump(trump)])
+            self._ach_tracker.on_deck_empty(
+                g.players[0].hand, all_trumps, trump)
 
-        # Interleave: one card per player per round until everyone is topped up
+        # Draw-up queue
+        order = ([g.attacker_idx]
+                 + [i for i in range(len(g.players))
+                    if i not in (g.attacker_idx, g.defender_idx)]
+                 + [g.defender_idx])
+        needs = {idx: max(0, 6 - len(g.players[idx].hand)) for idx in order}
         draw_queue = []
         given      = {idx: 0 for idx in order}
         any_dealt  = True
@@ -769,6 +823,41 @@ class GameScreen:
             self._draw_fly_next(draw_queue, 0)
         else:
             self._start_round()
+
+    def _trigger_game_over(self, result: str) -> None:
+        g     = self.game
+        trump = g.deck.trump
+
+        self._result      = result
+        self._result_tick = 0
+
+        # Snapshot stats
+        self._result_stats = {
+            "rounds":       self._stat_rounds,
+            "piles_taken":  self._stat_piles_taken,
+            "biggest_pile": self._stat_biggest_pile,
+            "trumps_played":self._stat_trumps_played,
+            "passes":       self._stat_passes,
+        }
+
+        # Fire achievement tracker
+        self._ach_tracker.on_game_over(
+            result, g.players[0].hand, g.players[1].hand, trump)
+
+        # Set game-over state
+        if result == R_WIN:
+            msg = "VICTORY"
+            audio.play("win")
+        elif result == R_LOSS:
+            msg = "DEFEAT"
+            audio.play("loss")
+            self._spawn_falling_cards()
+        else:
+            msg = "DRAW"
+            audio.play("win")  # neutral
+
+        self._set(S_GAME_OVER, msg)
+        audio.stop_music()
 
     def _draw_fly_next(self, queue, i):
         """Fly one draw-up card, add to hand on landing, then recurse until done."""
@@ -813,21 +902,43 @@ class GameScreen:
             return "quit"
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
+                if self._state == S_GAME_OVER:
+                    return "back"
                 return "pause"
             if event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                if self._state == S_GAME_OVER:
+                    return "back"
                 if not self._animating:
                     self._on_confirm()
+            # ── cheat code (silent) ───────────────────────────────────────
+            if event.key == _CHEAT_SEQUENCE[self._cheat_pos]:
+                self._cheat_pos += 1
+                if self._cheat_pos == len(_CHEAT_SEQUENCE):
+                    self._cheat_pos = 0
+                    self._activate_cheat()
+            else:
+                self._cheat_pos = 0
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             pause_rect = pygame.Rect(WIDTH - 76, 76, 40, 40)
             if pause_rect.collidepoint(event.pos):
                 audio.play("menu_click")
                 return "pause"
+            if self._state == S_GAME_OVER:
+                return "back"
             if not self._animating and self._state not in (S_DEALING, S_DRAWING):
                 self._on_click(event.pos)
         return None
 
+    def _activate_cheat(self):
+        """Queue all non-unlocked achievements to drip in one by one."""
+        s = self._ach_tracker._stats
+        queue = [a for a in ACHIEVEMENTS if a.key not in s.unlocked]
+        self._cheat_queue = queue
+        self._cheat_timer = 0
+
     def _on_confirm(self):
         if self._state in (S_HUMAN_ATTACK, S_PILE_ON):
+            self._stat_passes += 1
             self._finish_round(defender_took=False)
 
     def _on_click(self, pos):
@@ -840,6 +951,7 @@ class GameScreen:
 
         if self._state in (S_HUMAN_ATTACK, S_PILE_ON):
             if not g.table.is_empty() and self._pass_rect().collidepoint(pos):
+                self._stat_passes += 1
                 self._finish_round(defender_took=False)
                 return
             card = self._card_at_pos(pos)
@@ -848,12 +960,13 @@ class GameScreen:
             if not g.table.is_empty() and not validator.can_attack(card, g.table):
                 self._invalid_card = card
                 self._invalid_tick = 40
-                self._message      = f"{card}  rank not on table"
+                self._message      = f"{card} — rank not on table"
                 audio.play("card_reject")
                 return
-            hand_idx = g.players[0].hand.index(card)
-            src_rect = self._hand_rect(hand_idx, len(g.players[0].hand))
-            pair_idx = len(g.table.pairs)
+            hand_before = list(g.players[0].hand)
+            hand_idx    = g.players[0].hand.index(card)
+            src_rect    = self._hand_rect(hand_idx, len(g.players[0].hand))
+            pair_idx    = len(g.table.pairs)
             g.players[0].remove_card(card)
             g.table.add_attack(card)
             g.players[0].sort_hand(trump)
@@ -861,19 +974,32 @@ class GameScreen:
             dst      = self._table_pos(pair_idx, total, False)
             src      = (src_rect.centerx, src_rect.centery)
             card_str = str(card)
+            if card.is_trump(trump):
+                self._stat_trumps_played += 1
+            self._ach_tracker.on_player_attack(card, trump, hand_before)
+            if len(g.players[0].hand) == 0:
+                self._ach_tracker.on_final_card_played(card, trump, was_attack=True)
             def on_land(cs=card_str, pi=pair_idx):
                 while len(self._vis_table) <= pi:
                     self._vis_table.append((None, None))
                 _, dfn = self._vis_table[pi]
                 self._vis_table[pi] = (cs, dfn)
                 self._animating = False
-                # Start/reset the commit window  player can still add more cards
                 self._attack_commit_timer = _ATTACK_COMMIT_DELAY
             self._fly_card(card_str, src, dst, on_done=on_land)
 
         elif self._state == S_HUMAN_DEFEND:
             if self._pickup_rect().collidepoint(pos):
                 taken = g.table.all_cards()
+                # Check if had valid defence (The Fumble)
+                idx_def = g.table.first_undefended_index()
+                had_valid = False
+                if idx_def is not None:
+                    atk_card = g.table.pairs[idx_def].attack
+                    had_valid = bool(validator.valid_defences(g.players[0].hand, atk_card))
+                self._stat_piles_taken  += 1
+                self._stat_biggest_pile  = max(self._stat_biggest_pile, len(taken))
+                self._ach_tracker.on_player_takes_pile(taken, trump, had_valid)
                 g.players[0].hand.extend(taken)
                 g.players[0].sort_hand(trump)
                 g._advance_roles(defender_took=True)
@@ -890,8 +1016,9 @@ class GameScreen:
                 self._message      = f"{card} can't beat {atk}"
                 audio.play("card_reject")
                 return
-            hand_idx = g.players[0].hand.index(card)
-            src_rect = self._hand_rect(hand_idx, len(g.players[0].hand))
+            hand_before = list(g.players[0].hand)
+            hand_idx    = g.players[0].hand.index(card)
+            src_rect    = self._hand_rect(hand_idx, len(g.players[0].hand))
             g.players[0].remove_card(card)
             g.table.add_defence(idx, card)
             g.players[0].sort_hand(trump)
@@ -899,6 +1026,11 @@ class GameScreen:
             dst      = self._table_pos(idx, total, True)
             src      = (src_rect.centerx, src_rect.centery)
             card_str = str(card)
+            if card.is_trump(trump):
+                self._stat_trumps_played += 1
+            self._ach_tracker.on_player_defend(card, atk, trump)
+            if len(g.players[0].hand) == 0:
+                self._ach_tracker.on_final_card_played(card, trump, was_attack=False)
             def on_land(cs=card_str, pi=idx):
                 if pi < len(self._vis_table):
                     atk_s, _ = self._vis_table[pi]
@@ -940,7 +1072,7 @@ class GameScreen:
             if self._round_timer <= 0:
                 self._start_round()
 
-        # Attack commit window  count down after last attack card lands
+        # Attack commit window — count down after last attack card lands
         if self._attack_commit_timer > 0 and not self._animating:
             self._attack_commit_timer -= 1
             if self._attack_commit_timer <= 0:
@@ -959,6 +1091,53 @@ class GameScreen:
             cur    = self._hover.get(id(card), 0.0)
             self._hover[id(card)] = cur + (target - cur) * 0.2
 
+        # Cheat drip: unlock one achievement every 90 ticks
+        if self._cheat_queue:
+            self._cheat_timer -= 1
+            if self._cheat_timer <= 0:
+                ach = self._cheat_queue.pop(0)
+                self._ach_tracker._stats.unlocked.add(ach.key)
+                self._ach_toast.push(ach)
+                # Check platinum
+                from .achievements import _NON_PLATINUM
+                if all(k in self._ach_tracker._stats.unlocked for k in _NON_PLATINUM):
+                    plat = ACH["fools_overtime"]
+                    if plat.key not in self._ach_tracker._stats.unlocked:
+                        self._ach_tracker._stats.unlocked.add(plat.key)
+                        self._ach_toast.push(plat)
+                self._cheat_timer = 90
+
+        # Falling cards (loss screen)
+        if self._result == R_LOSS:
+            self._result_tick += 1
+            for fc in self._falling_cards:
+                fc["y"]   += fc["vy"]
+                fc["x"]   += fc["vx"]
+                fc["vy"]  += 0.4  # gravity
+                fc["rot"] += fc["rot_v"]
+
+        elif self._result in (R_WIN, R_TIE):
+            self._result_tick += 1
+
+        self._ach_toast.update()
+
+    # ── falling cards (loss animation) ────────────────────────────────────────
+
+    def _spawn_falling_cards(self):
+        self._falling_cards = []
+        suits = ["♠", "♥", "♦", "♣"]
+        ranks = ["6", "7", "8", "9", "10", "J", "Q", "K", "A"]
+        for _ in range(18):
+            self._falling_cards.append({
+                "x":     random.randint(0, WIDTH),
+                "y":     random.randint(-HEIGHT, 0),
+                "vx":    random.uniform(-1.5, 1.5),
+                "vy":    random.uniform(1, 4),
+                "rot":   random.uniform(0, 360),
+                "rot_v": random.uniform(-3, 3),
+                "card":  f"{random.choice(ranks)}{random.choice(suits)}",
+            })
+
     # ── draw ──────────────────────────────────────────────────────────────────
 
     def draw(self, surface=None):
@@ -970,9 +1149,9 @@ class GameScreen:
         self._draw_bg_grid(t, W, H)
         self._draw_discards(t)
         self._draw_bot_hand(t, W, H)
-        self._draw_trump_reveal(t, under_deck=True)  # phase 3: behind deck
+        self._draw_trump_reveal(t, under_deck=True)
         self._draw_deck_and_trump(t, W, H)
-        self._draw_trump_reveal(t, under_deck=False)  # phases 1+2: above deck
+        self._draw_trump_reveal(t, under_deck=False)
         self._draw_table_cards(t, W, H)
         self._draw_status_bar(t, W, H)
         self._draw_player_hand(t, W, H, mouse)
@@ -983,11 +1162,12 @@ class GameScreen:
         for fc in self._flying:
             fc.draw(t)
 
-        # Role reveal draws on top of everything
         self._draw_role_reveal(t)
 
         if self._state == S_GAME_OVER:
-            self._draw_game_over(t, W, H)
+            self._draw_result_screen(t, W, H)
+
+        self._ach_toast.draw(t)
 
     def _draw_bg_grid(self, t, W, H):
         for x in range(0, W, 40):
@@ -1026,7 +1206,7 @@ class GameScreen:
         remaining = self.game.deck.remaining()
         x, y      = 110, H // 2 - CARD_H // 2
 
-        # Draw tucked trump face-up rotated 90° under the deck  only once reveal is done
+        # Draw tucked trump face-up rotated 90° under the deck — only once reveal is done
         if getattr(self, "_trump_tucked", False) and remaining > 0 \
                 and self._trump_reveal_phase == 0:
             trump_card = self.game.deck.peek_bottom()
@@ -1062,7 +1242,7 @@ class GameScreen:
         t.blit(cnt, (x + CARD_W // 2 - cnt.get_width() // 2, y + CARD_H + 6))
 
     def _draw_table_cards(self, t, W, H):
-        # Always draw _vis_table  it's the source of truth for settled cards
+        # Always draw _vis_table — it's the source of truth for settled cards
         pairs = self._vis_table
         if not pairs:
             return
@@ -1094,7 +1274,7 @@ class GameScreen:
             av_y = 20 + CARD_H + 36
             t.blit(surf, (cx - surf.get_width() // 2, av_y + 40))
 
-        # Attack commit countdown arc  shows remaining window to add cards
+        # Attack commit countdown arc — shows remaining window to add cards
         if self._attack_commit_timer > 0 and not self._animating:
             ratio   = self._attack_commit_timer / _ATTACK_COMMIT_DELAY
             r       = 18
@@ -1102,7 +1282,7 @@ class GameScreen:
             rect    = pygame.Rect(cx - r, arc_y - r, r * 2, r * 2)
             # background ring
             pygame.draw.circle(t, PURPLE_DIM, (cx, arc_y), r, width=3)
-            # coloured arc  green to red as time runs out
+            # coloured arc — green to red as time runs out
             g_val   = int(200 * ratio)
             r_val   = int(200 * (1 - ratio))
             col     = (r_val, g_val, 60)
@@ -1223,14 +1403,117 @@ class GameScreen:
         for dy in (-8, 0, 8):
             pygame.draw.rect(t, TEXT_DIM, (r.x + 8, r.centery + dy - 1, 24, 2))
 
-    def _draw_game_over(self, t, W, H):
+    def _draw_result_screen(self, t, W, H):
+        result = self._result
+        tick   = self._result_tick
+        stats  = self._result_stats
+        f_title = self.fonts["title"]
+        f_btn   = self.fonts["btn"]
+        f_sm    = self.fonts["small"]
+
+        # ── shared overlay ────────────────────────────────────────────────────
         ov = pygame.Surface((W, H), pygame.SRCALPHA)
-        ov.fill((0, 0, 0, 180))
+        if result == R_WIN:
+            ov.fill((0, 0, 0, 200))
+        elif result == R_LOSS:
+            ov.fill((0, 0, 0, 210))
+        else:
+            ov.fill((0, 0, 0, 195))
         t.blit(ov, (0, 0))
-        lbl = self.fonts["title"].render(self._message, False, NEON_GLOW)
-        t.blit(lbl, (W // 2 - lbl.get_width() // 2, H // 2 - 30))
-        sub = self.fonts["small"].render("ESC to return", False, TEXT_DIM)
-        t.blit(sub, (W // 2 - sub.get_width() // 2, H // 2 + 20))
+
+        # ── loss: falling cards ───────────────────────────────────────────────
+        if result == R_LOSS:
+            for fc in self._falling_cards:
+                if fc["y"] > H + CARD_H:
+                    continue
+                cs = self._card_surf_by_str(fc["card"])
+                rot = pygame.transform.rotate(cs, fc["rot"])
+                rot.set_alpha(140)
+                t.blit(rot, (int(fc["x"]) - rot.get_width() // 2,
+                              int(fc["y"]) - rot.get_height() // 2))
+
+        cx = W // 2
+        cy = H // 2
+
+        # ── title ─────────────────────────────────────────────────────────────
+        fade_in  = min(1.0, tick / 40)
+        if result == R_WIN:
+            title_str = "VICTORY"
+            title_col = GOLD
+            sub_col   = NEON_GLOW
+            sub_str   = "You are not the fool. This time."
+        elif result == R_LOSS:
+            title_str = "DEFEAT"
+            title_col = (220, 60, 80)
+            sub_col   = TEXT_DIM
+            sub_str   = "You are the Durak."
+        else:
+            title_str = "DRAW"
+            title_col = PURPLE
+            sub_col   = TEXT_DIM
+            sub_str   = "Mutually assured foolishness."
+
+        title_s = f_title.render(title_str, False, title_col)
+        glow_s  = f_title.render(title_str, False, title_col)
+        glow_s.set_alpha(int(60 * fade_in))
+
+        # Pulse glow
+        pulse = abs(math.sin(tick * 0.04)) * 20
+        gs = pygame.Surface((title_s.get_width() + 40,
+                              title_s.get_height() + 20), pygame.SRCALPHA)
+        pygame.draw.rect(gs, (*title_col, int(20 + pulse)), gs.get_rect(),
+                         border_radius=6)
+        t.blit(gs, (cx - gs.get_width() // 2, cy - 120 - 10))
+
+        title_s.set_alpha(int(255 * fade_in))
+        t.blit(title_s, (cx - title_s.get_width() // 2, cy - 120))
+
+        sub_s = f_sm.render(sub_str, False, sub_col)
+        sub_s.set_alpha(int(220 * fade_in))
+        t.blit(sub_s, (cx - sub_s.get_width() // 2, cy - 120 + title_s.get_height() + 8))
+
+        # ── divider ───────────────────────────────────────────────────────────
+        div_alpha = int(180 * fade_in)
+        div_surf  = pygame.Surface((320, 1), pygame.SRCALPHA)
+        div_surf.fill((*PURPLE, div_alpha))
+        t.blit(div_surf, (cx - 160, cy - 50))
+
+        # ── stats panel ───────────────────────────────────────────────────────
+        stat_fade = min(1.0, max(0.0, (tick - 20) / 40))
+        stat_lines = [
+            ("ROUNDS PLAYED",    str(stats.get("rounds", 0))),
+            ("PILES TAKEN",      str(stats.get("piles_taken", 0))),
+            ("BIGGEST PILE",     str(stats.get("biggest_pile", 0))),
+            ("TRUMPS PLAYED",    str(stats.get("trumps_played", 0))),
+            ("TIMES PASSED",     str(stats.get("passes", 0))),
+        ]
+
+        panel_w, panel_h = 320, len(stat_lines) * 22 + 16
+        px = cx - panel_w // 2
+        py = cy - 38
+
+        panel_surf = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
+        panel_surf.fill((20, 10, 40, int(200 * stat_fade)))
+        pygame.draw.rect(panel_surf, (*PURPLE_DIM, int(150 * stat_fade)),
+                         panel_surf.get_rect(), width=1, border_radius=4)
+        t.blit(panel_surf, (px, py))
+
+        for i, (label, val) in enumerate(stat_lines):
+            sy    = py + 8 + i * 22
+            lbl_s = f_sm.render(label, False, TEXT_DIM)
+            val_s = f_sm.render(val,   False, TEXT_MAIN)
+            lbl_s.set_alpha(int(220 * stat_fade))
+            val_s.set_alpha(int(220 * stat_fade))
+            t.blit(lbl_s, (px + 12, sy))
+            t.blit(val_s, (px + panel_w - val_s.get_width() - 12, sy))
+
+        # ── prompt ────────────────────────────────────────────────────────────
+        prompt_fade = min(1.0, max(0.0, (tick - 50) / 30))
+        if prompt_fade > 0:
+            blink = abs(math.sin(tick * 0.05))
+            prompt_s = f_sm.render("PRESS ANY KEY TO CONTINUE", False, TEXT_DIM)
+            prompt_s.set_alpha(int(200 * prompt_fade * blink))
+            t.blit(prompt_s, (cx - prompt_s.get_width() // 2, cy + panel_h + 20))
 
     # ── card image loading ────────────────────────────────────────────────────
 

@@ -12,6 +12,7 @@ from .play_select import PlaySelectScreen
 from .settings_screen import SettingsScreen
 from .pause_screen import PauseScreen
 from .tutorial_screen import TutorialScreen
+from .achievements_screen import AchievementsScreen
 from .transition import ZoomTransition, CardSweepTransition
 from . import audio
 
@@ -64,16 +65,18 @@ def run() -> None:
     play_select = PlaySelectScreen(screen, fonts, vignette)
     settings    = SettingsScreen(screen, fonts, vignette)
     tutorial    = TutorialScreen(screen, fonts, vignette)
+    achievements = AchievementsScreen(screen, fonts, vignette)
     pause       = PauseScreen(fonts)
     transition  = ZoomTransition()
     card_sweep  = CardSweepTransition()
     game_screen = None
 
     screens = {
-        "menu":        menu,
-        "play_select": play_select,
-        "settings":    settings,
-        "tutorial":    tutorial,
+        "menu":         menu,
+        "play_select":  play_select,
+        "settings":     settings,
+        "tutorial":     tutorial,
+        "achievements": achievements,
     }
 
     def set_screen(name: str) -> None:
@@ -116,6 +119,7 @@ def run() -> None:
         def _on_switch():
             set_screen("menu")
             audio.play_music("main_menu")
+            achievements.refresh()
             nonlocal game_screen
             game_screen = None
         audio.play("transition_change")
@@ -148,8 +152,16 @@ def run() -> None:
                     tutorial = TutorialScreen(screen, fonts, vignette)
                     screens["tutorial"] = tutorial
                     zoom_to("tutorial", rect, direction=1)
+                elif action == "achievements" and rect:
+                    achievements.refresh()
+                    zoom_to("achievements", rect, direction=1)
                 elif action == "settings" and rect:
                     go_settings_from_menu(rect)
+
+            elif current == "achievements":
+                action = achievements.handle_event(event)
+                if action == "back":
+                    zoom_to("menu", pygame.Rect(WIDTH // 2 - 80, HEIGHT // 2, 160, 42), direction=-1)
 
             elif current == "play_select":
                 action, rect = play_select.handle_event_with_rect(event)
@@ -203,8 +215,7 @@ def run() -> None:
                     pygame.quit()
                     sys.exit()
                 elif action == "back":
-                    set_screen("play_select")
-                    audio.play_music("main_menu")
+                    sweep_to_menu()
                 elif action == "pause":
                     set_screen("pause")
 
@@ -214,6 +225,9 @@ def run() -> None:
                     set_screen("game")
                 elif action == "settings":
                     go_settings_from_pause()
+                elif action == "achievements":
+                    achievements.refresh()
+                    set_screen("achievements")
                 elif action == "main_menu":
                     sweep_to_menu()
 
