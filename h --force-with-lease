@@ -1,0 +1,25 @@
+[33m6c3b1a6[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m)[m Spent way too long on this one. Complete rework of the achievement pipeline from the ground up — the old 12-achievement stub was never going to scale so nuked it and built something proper.
+[33m58984af[m restructured tutorial, added small bug fixes
+[33m9db1d06[m Refactor code structure and remove redundant code blocks for improved readability and maintainability
+[33m4f980f1[m worked on audio, added sound effects for every action, added background music as well with a low pass filter for better experience
+[33mdb27ff3[m feat: animated deal, draw-up, card flight, discard scatter, attack commit window
+[33m6815e84[m MASSIVE COMMIT: Went through a rigorous process of designing, bug fixing, experimentation with animations and other game logics. Rewritten code several times. Fixed bot logic, move validation, kept console messages for compatibility, included card images for cards rather than generating with vectors. Improved animations, smoothened them.
+[33md1b35e7[m prototype: wire game core to ui, render initial game state
+[33m58eb4d9[m feat: play select screen + screen transitions (after much experimentation)
+[33m9708cd4[m feat: main menu polish - credits panel, footer, title easter egg
+[33m6be85bf[m feat: pygame ui foundation - main menu with retro-inspired theme
+[33mecaf442[m ux: more refined looks on console to reduce confusion
+[33m8decff9[m ux: animated thinking dots, much cleaner output
+[33m82b688c[m ux: cleaner console output with thinking pause and round confirmation
+[33m0c3707f[m refactor: extract MoveValidator for centralised rule checking
+[33m707cc5a[m feat: core game loop v1 - full round logic with attacker/defender roles
+[33m07c2459[m feat: sort player hands by rank with trump last
+[33mb76221e[m ai: add simple stop heuristic to attacker logic
+[33mf11b5ef[m game: support multiple attacks per round (rank-matching rule)
+[33med72935[m tests: add basic card rule unit tests
+[33ma6ccc9a[m small change to run in powershell
+[33md16f324[m keep local main
+[33mbbfe6ca[m initial local vers
+[33m2806922[m Add files via upload
+[33m1278a14[m[33m ([m[1;31morigin/src[m[33m)[m Create requirements.txt
+[33m70bc86e[m Initial commit
