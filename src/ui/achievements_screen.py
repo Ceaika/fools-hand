@@ -15,6 +15,8 @@ from .constants import (
     BTN_RADIUS,
 )
 from .achievements import ACHIEVEMENTS, COMMON, RARE, EPIC, PLATINUM, get_global_stats
+from .locale import t as _t
+from .font_manager import get_fonts
 
 _COLS     = 2
 _CARD_W   = 510
@@ -41,12 +43,8 @@ _TIER_COL = {
     EPIC:     (255, 50,  120),
     PLATINUM: (255, 200, 80),
 }
-_TIER_LABEL = {
-    COMMON:   "COMMON",
-    RARE:     "RARE",
-    EPIC:     "EPIC",
-    PLATINUM: "PLATINUM",
-}
+def _tier_label(tier: str) -> str:
+    return _t(f"tier.{tier}")
 
 
 def _ease(t: float) -> float:
@@ -195,11 +193,12 @@ class AchievementsScreen:
         count    = len(unlocked)
         total    = len(ACHIEVEMENTS)
         cx       = WIDTH // 2
-        f_title  = self.fonts["title"]
-        f_sm     = self.fonts["small"]
+        f        = get_fonts()
+        f_title  = f["title"]
+        f_sm     = f["small"]
 
-        title = f_title.render("ACHIEVEMENTS", False, TEXT_MAIN)
-        glow  = f_title.render("ACHIEVEMENTS", False, NEON_GLOW)
+        title = f_title.render(_t("ach_screen.title"), False, TEXT_MAIN)
+        glow  = f_title.render(_t("ach_screen.title"), False, NEON_GLOW)
         glow.set_alpha(35)
         t.blit(glow, (cx - glow.get_width() // 2 - 2, 20))
         t.blit(title, (cx - title.get_width() // 2, 20))
@@ -217,7 +216,7 @@ class AchievementsScreen:
             t.blit(gs, (bx - 4, by - 4))
 
         lbl_col = GOLD if count == total else TEXT_DIM
-        lbl = f_sm.render(f"{count} / {total}  UNLOCKED", False, lbl_col)
+        lbl = f_sm.render(f"{count} / {total}  {_t('ach_screen.unlocked')}", False, lbl_col)
         t.blit(lbl, (cx - lbl.get_width() // 2, by + bar_h + 5))
         pygame.draw.line(t, PURPLE_DIM, (40, _TOP_Y - 6), (WIDTH - 40, _TOP_Y - 6), 1)
 
@@ -276,17 +275,18 @@ class AchievementsScreen:
 
             # Dismiss hint fades in at end of animation
             if p > 0.6:
-                f_sm    = self.fonts["small"]
+                f_sm    = get_fonts()["small"]
                 hint_a  = int(200 * ((p - 0.6) / 0.4))
-                hint    = f_sm.render("CLICK ANYWHERE TO CLOSE", False, (80, 55, 110))
+                hint    = f_sm.render(_t("ach_screen.click_close"), False, (80, 55, 110))
                 hint.set_alpha(hint_a)
                 t.blit(hint, (WIDTH // 2 - hint.get_width() // 2, cy + ch + 14))
 
     def _draw_card(self, t, x, y, w, h, ach, unlocked, idx,
                    alpha=255, focused_p=0.0):
         tier_col   = _TIER_COL[ach.tier]
-        f_name     = self.fonts["btn"]
-        f_desc     = self.fonts["small"]
+        f          = get_fonts()
+        f_name     = f["btn"]
+        f_desc     = f["small"]
         icon_w     = int(_ICON_W + (_FOCUS_ICON_W - _ICON_W) * focused_p)
 
         # Panel
@@ -373,7 +373,7 @@ class AchievementsScreen:
             t.blit(desc_s, (tx, ty + name_s.get_height() + 6))
 
         # Tier label (bottom right)
-        tier_lbl = f_desc.render(_TIER_LABEL[ach.tier], False,
+        tier_lbl = f_desc.render(_tier_label(ach.tier), False,
                                   tier_col if unlocked else PURPLE_DIM)
         if alpha < 255:
             tier_lbl.set_alpha(alpha)
@@ -388,13 +388,13 @@ class AchievementsScreen:
             t.blit(gs, (x, y))
 
     def _draw_back_btn(self, t):
-        f     = self.fonts["btn"]
+        f     = get_fonts()["btn"]
         mouse = pygame.mouse.get_pos()
         hov   = self._back_rect.collidepoint(mouse) and not self._focus_ach
         pygame.draw.rect(t, NEON_DARK if hov else PURPLE_DIM,
                           self._back_rect, border_radius=BTN_RADIUS)
         pygame.draw.rect(t, NEON if hov else PURPLE,
                           self._back_rect, width=1, border_radius=BTN_RADIUS)
-        lbl = f.render("< BACK", False, TEXT_MAIN)
+        lbl = f.render(_t("ach_screen.back"), False, TEXT_MAIN)
         t.blit(lbl, (self._back_rect.centerx - lbl.get_width() // 2,
                       self._back_rect.centery - lbl.get_height() // 2))

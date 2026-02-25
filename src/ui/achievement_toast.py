@@ -19,6 +19,8 @@ from .constants import (
     PURPLE, PURPLE_DIM, GOLD, TEXT_MAIN, TEXT_DIM, BG, BTN_RADIUS,
 )
 from .achievements import Achievement, COMMON, RARE, EPIC, PLATINUM
+from .locale import t as _t
+from .font_manager import get_fonts
 
 # ── regular toast dims ────────────────────────────────────────────────────────
 _W      = 360
@@ -50,18 +52,16 @@ _TIER_BORDER = {
     EPIC:     (255, 50,  120),
     PLATINUM: (255, 200, 80),
 }
-_TIER_LABEL = {
-    COMMON:   "ACHIEVEMENT UNLOCKED",
-    RARE:     "RARE ACHIEVEMENT",
-    EPIC:     "EPIC ACHIEVEMENT",
-    PLATINUM: "PLATINUM  •  ALL ACHIEVEMENTS",
-}
 _TIER_HEADER_COL = {
     COMMON:   TEXT_DIM,
     RARE:     (60, 140, 255),
     EPIC:     NEON_GLOW,
     PLATINUM: GOLD,
 }
+
+
+def _tier_toast_label(tier: str) -> str:
+    return _t(f"toast.{tier}")
 
 
 class AchievementToast:
@@ -169,19 +169,19 @@ class AchievementToast:
                          pygame.Rect(0, 0, _ICON_W, th),
                          border_radius=BTN_RADIUS + 2)
 
-        f_icon = self._fonts["btn"]
+        f_icon = get_fonts()["btn"]
         icon_sym = "★" if is_plat else "?"
         icon_s = f_icon.render(icon_sym, False,
                                 GOLD if is_plat else _TIER_HEADER_COL[ach.tier])
         surf.blit(icon_s, (_ICON_W // 2 - icon_s.get_width() // 2,
                             th // 2 - icon_s.get_height() // 2))
 
-        f_sm  = self._fonts["small"]
-        f_btn = self._fonts["btn"]
+        f_sm  = get_fonts()["small"]
+        f_btn = get_fonts()["btn"]
         tx    = _ICON_W + _PAD
         header_col = _TIER_HEADER_COL[ach.tier]
 
-        header = f_sm.render(_TIER_LABEL[ach.tier], False, header_col)
+        header = f_sm.render(_tier_toast_label(ach.tier), False, header_col)
         surf.blit(header, (tx, 10))
 
         name_col = GOLD if is_plat else TEXT_MAIN

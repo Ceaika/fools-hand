@@ -69,6 +69,7 @@ def run() -> None:
     pause       = PauseScreen(fonts)
 
     def _on_lang_change(code: str) -> None:
+        menu.rebuild_labels()
         pause.rebuild_labels()
 
     settings.set_on_lang_change(_on_lang_change)

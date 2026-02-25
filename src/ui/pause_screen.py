@@ -42,10 +42,10 @@ class PauseScreen:
 
     def rebuild_labels(self) -> None:
         """Call after a language change to refresh button text."""
-        self._resume_btn._label       = t("pause.resume")
-        self._achievements_btn._label = t("pause.achievements")
-        self._settings_btn._label     = t("pause.settings")
-        self._menu_btn._label         = t("pause.main_menu")
+        self._resume_btn.text       = t("pause.resume")
+        self._achievements_btn.text = t("pause.achievements")
+        self._settings_btn.text     = t("pause.settings")
+        self._menu_btn.text         = t("pause.main_menu")
 
     def handle_event(self, event) -> str | None:
         if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:

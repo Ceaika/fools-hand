@@ -15,6 +15,8 @@ from .constants import (
 )
 from .achievements import AchievementTracker, ACHIEVEMENTS, ACH
 from .achievement_toast import AchievementToast
+from .font_manager import get_fonts
+from .locale import t as _t
 
 _BOT_DELAY    = 90
 _ROUND_DELAY  = 90
@@ -34,15 +36,15 @@ R_WIN  = "win"
 R_LOSS = "loss"
 R_TIE  = "tie"
 
-_STATUS = {
-    S_DEALING:      "DEAL",
-    S_DRAWING:      "DEAL",
-    S_HUMAN_ATTACK: "ATTACK",
-    S_HUMAN_DEFEND: "DEFEND",
-    S_PILE_ON:      "PILE ON",
-    S_BOT_THINKING: "BOT",
-    S_ROUND_OVER:   "...",
-    S_GAME_OVER:    "GAME OVER",
+_STATUS_KEYS = {
+    S_DEALING:      "game.status_deal",
+    S_DRAWING:      "game.status_deal",
+    S_HUMAN_ATTACK: "game.status_attack",
+    S_HUMAN_DEFEND: "game.status_defend",
+    S_PILE_ON:      "game.status_pile_on",
+    S_BOT_THINKING: "game.status_bot",
+    S_ROUND_OVER:   "",
+    S_GAME_OVER:    "game.status_game_over",
 }
 
 # Cheat code: first 12 digits of pi = 3 1 4 1 5 9 2 6 5 3 5 8
@@ -185,9 +187,13 @@ class GameScreen:
     # ── position helpers ─────────────────────────────────────────────────────
 
     def _hand_rect(self, idx, total):
+        max_w   = WIDTH - 40          # leave 20px margin each side
         gap     = 10
         total_w = total * CARD_W + (total - 1) * gap
-        sx      = WIDTH // 2 - total_w // 2
+        if total_w > max_w and total > 1:
+            gap     = max(-(CARD_W - 8), (max_w - total * CARD_W) // (total - 1))
+            total_w = total * CARD_W + (total - 1) * gap
+        sx = WIDTH // 2 - total_w // 2
         return pygame.Rect(sx + idx * (CARD_W + gap), HEIGHT - CARD_H - 20, CARD_W, CARD_H)
 
     def _table_pos(self, pair_idx, total_pairs, is_defence):
@@ -353,8 +359,8 @@ class GameScreen:
 
     def _begin_role_reveal(self):
         g = self.game
-        self._role_final        = "ATTACKING" if g.attacker_idx == 0 else "DEFENDING"
-        self._role_tick         = 0
+        self._role_final         = "attacking" if g.attacker_idx == 0 else "defending"
+        self._role_tick          = 0
         self._role_reveal_active = True
 
     def _update_role_reveal(self):
@@ -375,7 +381,7 @@ class GameScreen:
         cx, cy = W // 2, H // 2
         tick   = self._role_tick
 
-        roles     = ["ATTACKING", "DEFENDING"]
+        roles     = ["attacking", "defending"]
         cycle_end = self._ROLE_CYCLE_TICKS
         hold_end  = cycle_end + self._ROLE_HOLD_TICKS
         fade_end  = hold_end  + self._ROLE_FADE_TICKS
@@ -415,19 +421,18 @@ class GameScreen:
         if alpha <= 0:
             return
 
-        is_attack  = (word == "ATTACKING")
-        word_col   = (100, 220, 255) if is_attack else (255, 160, 80)   # blue=attack, orange=defend
+        is_attack  = (word == "attacking")
+        word_col   = (100, 220, 255) if is_attack else (255, 160, 80)
         label_col  = TEXT_DIM
 
-        title_f = self.fonts["title"]
-        role_f  = self.fonts["title"]
+        title_f = get_fonts()["title"]
+        role_f  = get_fonts()["title"]
 
-        # "YOU ARE" label
-        you_surf = title_f.render("YOU ARE", False, label_col)
+        you_surf = title_f.render(_t("game.you_are"), False, label_col)
         you_surf.set_alpha(alpha)
 
-        # Role word — render at base size then scale
-        role_surf_base = role_f.render(word, False, word_col)
+        role_word = _t(f"game.{word}")
+        role_surf_base = role_f.render(role_word, False, word_col)
         if scale != 1.0:
             new_w = max(1, int(role_surf_base.get_width()  * scale))
             new_h = max(1, int(role_surf_base.get_height() * scale))
@@ -437,7 +442,7 @@ class GameScreen:
         role_surf.set_alpha(alpha)
 
         # Neon glow behind role word
-        glow_surf_base = role_f.render(word, False, NEON_GLOW)
+        glow_surf_base = role_f.render(role_word, False, NEON_GLOW)
         if scale != 1.0:
             gw = max(1, int(glow_surf_base.get_width()  * scale))
             gh = max(1, int(glow_surf_base.get_height() * scale))
@@ -580,7 +585,7 @@ class GameScreen:
                 src   = self._table_pos(i, count, is_dfn)
                 dst   = self._discard_pos()
                 angle = random.uniform(-35, 35)
-                surf  = self._scaled(self._card_surf_by_str(card_str))
+                surf  = self._scaled(self._get_back_surf((CARD_W, CARD_H)))
                 def make_cb(s=surf, d=dst, a=angle):
                     def cb(): landed(s, d, a)
                     return cb
@@ -635,7 +640,8 @@ class GameScreen:
     def _set(self, state, msg=""):
         self._state   = state
         self._message = msg
-        label = _STATUS.get(state, "")
+        key   = _STATUS_KEYS.get(state, "")
+        label = _t(key) if key else ("..." if state == S_ROUND_OVER else "")
         if label and label != self._status_label:
             self._status_label = label
             self._status_alpha = 255
@@ -960,7 +966,7 @@ class GameScreen:
             if not g.table.is_empty() and not validator.can_attack(card, g.table):
                 self._invalid_card = card
                 self._invalid_tick = 40
-                self._message      = f"{card} — rank not on table"
+                self._message = f"{card} — {_t('game.rank_not_on_table')}"
                 audio.play("card_reject")
                 return
             hand_before = list(g.players[0].hand)
@@ -1013,7 +1019,7 @@ class GameScreen:
             if not validator.can_defend(card, atk):
                 self._invalid_card = card
                 self._invalid_tick = 40
-                self._message      = f"{card} can't beat {atk}"
+                self._message = f"{card} {_t('game.cant_beat')} {atk}"
                 audio.play("card_reject")
                 return
             hand_before = list(g.players[0].hand)
@@ -1184,10 +1190,14 @@ class GameScreen:
     def _draw_bot_hand(self, t, W, H):
         bot     = self.game.players[1]
         count   = len(bot.hand)
+        max_w   = W - 40
         gap     = 6
-        total_w = count * CARD_W + (count - 1) * gap
-        sx      = W // 2 - total_w // 2
-        y       = 20
+        total_w = count * CARD_W + max(0, count - 1) * gap
+        if total_w > max_w and count > 1:
+            gap     = max(-(CARD_W - 8), (max_w - count * CARD_W) // (count - 1))
+            total_w = count * CARD_W + (count - 1) * gap
+        sx = W // 2 - total_w // 2
+        y  = 20
         for i in range(count):
             t.blit(self._get_back_surf((CARD_W, CARD_H)), (sx + i * (CARD_W + gap), y))
 
@@ -1198,7 +1208,7 @@ class GameScreen:
         pygame.draw.circle(t, TEXT_DIM,   (av_cx, av_cy - 8), 10)
         pygame.draw.ellipse(t, TEXT_DIM,
             pygame.Rect(av_cx - 14, av_cy + 4, 28, 16))
-        f   = self.fonts["small"]
+        f   = get_fonts()["small"]
         cnt = f.render(str(count), False, TEXT_DIM)
         t.blit(cnt, (av_cx - cnt.get_width() // 2, av_cy + av_r + 6))
 
@@ -1237,7 +1247,7 @@ class GameScreen:
                     (cx - surf.get_width() // 2 + ox, cy - surf.get_height() // 2 + oy)
                 )
 
-        f   = self.fonts["small"]
+        f   = get_fonts()["small"]
         cnt = f.render(str(remaining), False, TEXT_DIM)
         t.blit(cnt, (x + CARD_W // 2 - cnt.get_width() // 2, y + CARD_H + 6))
 
@@ -1261,7 +1271,7 @@ class GameScreen:
 
     def _draw_status_bar(self, t, W, H):
         cx = W // 2
-        f  = self.fonts["small"]
+        f  = get_fonts()["small"]
 
         if self._status_alpha > 0 and self._status_label:
             label = self._status_label
@@ -1326,14 +1336,14 @@ class GameScreen:
             t.blit(surf, (rect.x, rect.y - lift))
 
     def _draw_action_buttons(self, t, W, H, mouse):
-        f = self.fonts["small"]
+        f = get_fonts()["small"]
 
         if self._state == S_HUMAN_DEFEND:
             r   = self._pickup_rect()
             col = NEON_DARK if r.collidepoint(mouse) else (80, 20, 40)
             pygame.draw.rect(t, col, r, border_radius=6)
             pygame.draw.rect(t, NEON, r, width=1, border_radius=6)
-            lbl = f.render("TAKE CARDS", False, TEXT_MAIN)
+            lbl = f.render(_t("game.take_cards"), False, TEXT_MAIN)
             t.blit(lbl, (r.centerx - lbl.get_width() // 2,
                           r.centery - lbl.get_height() // 2))
 
@@ -1342,7 +1352,7 @@ class GameScreen:
             col = (50, 50, 120) if r.collidepoint(mouse) else (20, 20, 55)
             pygame.draw.rect(t, col, r, border_radius=6)
             pygame.draw.rect(t, PURPLE, r, width=1, border_radius=6)
-            lbl = f.render("PASS", False, TEXT_MAIN)
+            lbl = f.render(_t("game.pass"), False, TEXT_MAIN)
             t.blit(lbl, (r.centerx - lbl.get_width() // 2,
                           r.centery - lbl.get_height() // 2))
 
@@ -1352,10 +1362,23 @@ class GameScreen:
         pygame.draw.rect(t, PURPLE,     r, width=1, border_radius=8)
 
         _all_suits   = ['♥', '♦', '♠', '♣']
-        name_map     = {'♥': 'HEARTS', '♦': 'DIAMONDS', '♠': 'SPADES', '♣': 'CLUBS'}
+        name_map     = {
+            '♥': _t("suits.hearts")   if False else 'HEARTS',
+            '♦': _t("suits.diamonds") if False else 'DIAMONDS',
+            '♠': _t("suits.spades")   if False else 'SPADES',
+            '♣': _t("suits.clubs")    if False else 'CLUBS',
+        }
+        # Suit names in all three languages
+        from .locale import get_lang as _gl
+        _suit_names = {
+            "en": {'♥': 'HEARTS', '♦': 'DIAMONDS', '♠': 'SPADES', '♣': 'CLUBS'},
+            "ru": {'♥': 'ЧЕРВЫ',  '♦': 'БУБНЫ',    '♠': 'ПИКИ',   '♣': 'ТРЕФЫ'},
+            "ro": {'♥': 'INIMI',  '♦': 'ROMBURI',  '♠': 'PICĂ',   '♣': 'TREFLĂ'},
+        }
+        name_map = _suit_names.get(_gl(), _suit_names["en"])
         real_sym     = str(self.game.deck.trump)   # the actual trump suit symbol
-        f            = self.fonts["small"]
-        f_big        = self.fonts.get("body", f)
+        f            = get_fonts()["small"]
+        f_big        = get_fonts().get("body", f)
 
         # During deal: cycle fast using shuffle_tick
         # During reveal phases 1+2: cycle fast using reveal_tick
@@ -1381,7 +1404,7 @@ class GameScreen:
         is_red   = suit_sym in ('♥', '♦')
         suit_col = (220, 60, 80) if is_red else TEXT_MAIN
 
-        label = f.render("TRUMP", False, TEXT_DIM)
+        label = f.render(_t("game.trump"), False, TEXT_DIM)
         t.blit(label, (r.x + 10, r.y + 8))
 
         sym      = f_big.render(suit_sym, False, suit_col)
@@ -1407,9 +1430,9 @@ class GameScreen:
         result = self._result
         tick   = self._result_tick
         stats  = self._result_stats
-        f_title = self.fonts["title"]
-        f_btn   = self.fonts["btn"]
-        f_sm    = self.fonts["small"]
+        f_title = get_fonts()["title"]
+        f_btn   = get_fonts()["btn"]
+        f_sm    = get_fonts()["small"]
 
         # ── shared overlay ────────────────────────────────────────────────────
         ov = pygame.Surface((W, H), pygame.SRCALPHA)
@@ -1438,20 +1461,20 @@ class GameScreen:
         # ── title ─────────────────────────────────────────────────────────────
         fade_in  = min(1.0, tick / 40)
         if result == R_WIN:
-            title_str = "VICTORY"
+            title_str = _t("result.victory")
             title_col = GOLD
             sub_col   = NEON_GLOW
-            sub_str   = "You are not the fool. This time."
+            sub_str   = _t("result.sub_win")
         elif result == R_LOSS:
-            title_str = "DEFEAT"
+            title_str = _t("result.defeat")
             title_col = (220, 60, 80)
             sub_col   = TEXT_DIM
-            sub_str   = "You are the Durak."
+            sub_str   = _t("result.sub_loss")
         else:
-            title_str = "DRAW"
+            title_str = _t("result.draw")
             title_col = PURPLE
             sub_col   = TEXT_DIM
-            sub_str   = "Mutually assured foolishness."
+            sub_str   = _t("result.sub_draw")
 
         title_s = f_title.render(title_str, False, title_col)
         glow_s  = f_title.render(title_str, False, title_col)
@@ -1481,11 +1504,11 @@ class GameScreen:
         # ── stats panel ───────────────────────────────────────────────────────
         stat_fade = min(1.0, max(0.0, (tick - 20) / 40))
         stat_lines = [
-            ("ROUNDS PLAYED",    str(stats.get("rounds", 0))),
-            ("PILES TAKEN",      str(stats.get("piles_taken", 0))),
-            ("BIGGEST PILE",     str(stats.get("biggest_pile", 0))),
-            ("TRUMPS PLAYED",    str(stats.get("trumps_played", 0))),
-            ("TIMES PASSED",     str(stats.get("passes", 0))),
+            (_t("result.rounds"),        str(stats.get("rounds", 0))),
+            (_t("result.piles_taken"),   str(stats.get("piles_taken", 0))),
+            (_t("result.biggest_pile"),  str(stats.get("biggest_pile", 0))),
+            (_t("result.trumps_played"), str(stats.get("trumps_played", 0))),
+            (_t("result.times_passed"),  str(stats.get("passes", 0))),
         ]
 
         panel_w, panel_h = 320, len(stat_lines) * 22 + 16
@@ -1511,7 +1534,7 @@ class GameScreen:
         prompt_fade = min(1.0, max(0.0, (tick - 50) / 30))
         if prompt_fade > 0:
             blink = abs(math.sin(tick * 0.05))
-            prompt_s = f_sm.render("PRESS ANY KEY TO CONTINUE", False, TEXT_DIM)
+            prompt_s = f_sm.render(_t("result.press_any_key"), False, TEXT_DIM)
             prompt_s.set_alpha(int(200 * prompt_fade * blink))
             t.blit(prompt_s, (cx - prompt_s.get_width() // 2, cy + panel_h + 20))
 
@@ -1587,7 +1610,7 @@ class GameScreen:
         col    = CARD_RED if is_red else CARD_BLACK
         pygame.draw.rect(surf, CARD_BG,    (0, 0, CARD_W, CARD_H), border_radius=5)
         pygame.draw.rect(surf, CARD_BORDER,(0, 0, CARD_W, CARD_H), width=1, border_radius=5)
-        lbl = self.fonts["small"].render(str(card), False, col)
+        lbl = get_fonts()["small"].render(str(card), False, col)
         surf.blit(lbl, (4, 4))
         return surf
 
@@ -1611,3 +1634,4 @@ class GameScreen:
 
     def _pass_rect(self):
         return pygame.Rect(WIDTH - 200, HEIGHT // 2 + 80, 140, 40)
+    

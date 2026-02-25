@@ -11,6 +11,8 @@ from .constants import (
     BTN_W, BTN_H, BTN_GAP, BTN_RADIUS,
 )
 from .widgets import Button
+from .locale import t as _t
+from .font_manager import get_fonts
 
 _REPEL_DIST  = 30
 _REPEL_FORCE = 180
@@ -37,16 +39,16 @@ class MainMenu:
         total_h = 4 * BTN_H + 3 * BTN_GAP
         start_y = HEIGHT // 2 - total_h // 2 + 60
 
-        self.buttons: list[tuple[Button, str]] = []
-        for i, (label, action) in enumerate([
-            ("PLAY",         "play"),
-            ("TUTORIAL",     "tutorial"),
-            ("SETTINGS",     "settings"),
-            ("QUIT",         "quit"),
+        self.buttons: list[tuple[Button, str, str]] = []
+        for i, (label_key, action) in enumerate([
+            ("menu.play",     "play"),
+            ("menu.tutorial", "tutorial"),
+            ("menu.settings", "settings"),
+            ("menu.quit",     "quit"),
         ]):
             y   = start_y + i * (BTN_H + BTN_GAP)
-            btn = Button(cx, y, label, font=fonts["btn"])
-            self.buttons.append((btn, action))
+            btn = Button(cx, y, _t(label_key), font=fonts["btn"])
+            self.buttons.append((btn, action, label_key))
 
         quit_btn        = self.buttons[-1][0]
         self._quit_btn  = quit_btn
@@ -128,7 +130,7 @@ class MainMenu:
             if self._panel_open and not panel_rect.collidepoint(event.pos):
                 self._panel_open = False
                 return None, None
-        for btn, action in self.buttons:
+        for btn, action, _lk in self.buttons:
             if btn.handle_event(event):
                 return action, btn.rect.copy()
         return None, None
@@ -136,6 +138,13 @@ class MainMenu:
     def handle_event(self, event: pygame.event.Event) -> str | None:
         action, _ = self.handle_event_with_rect(event)
         return action
+
+    def rebuild_labels(self) -> None:
+        """Refresh all button labels and fonts after a language change."""
+        f = get_fonts()
+        for btn, action, label_key in self.buttons:
+            btn.text = _t(label_key)
+            btn.font = f["btn"]
 
     def update(self) -> None:
         self.tick += 1
@@ -147,7 +156,10 @@ class MainMenu:
         self._update_quit_btn(mouse)
         self._update_panel()
         self._update_decode()
-        for btn, _ in self.buttons:
+        f = get_fonts()
+        for btn, action, label_key in self.buttons:
+            btn.text = _t(label_key)
+            btn.font = f["btn"]
             btn.update(mouse)
 
     def _update_decode(self) -> None:
@@ -202,7 +214,7 @@ class MainMenu:
         self._draw_divider()
 
         # Buttons: spark in during phase 3
-        for i, (btn, _) in enumerate(self.buttons):
+        for i, (btn, _, _lk) in enumerate(self.buttons):
             btn_alpha, btn_offset = self._intro_btn_state(it, i)
             btn.draw(t, alpha_override=btn_alpha, x_offset=btn_offset)
 
@@ -242,7 +254,7 @@ class MainMenu:
         y     = 60
         pad   = px + 24
 
-        title_surf = small.render("CREDITS", False, NEON_GLOW)
+        title_surf = small.render(_t("menu.credits"), False, NEON_GLOW)
         self._draw_target.blit(title_surf, (pad, y))
         y += title_surf.get_height() + 4
         pygame.draw.rect(self._draw_target, NEON, (pad, y, _PANEL_W - 48, 2))
@@ -430,9 +442,9 @@ class MainMenu:
 
     def _draw_footer(self) -> None:
         small = self.fonts["small"]
-        ver   = small.render("demo-release | DO NOT REDISTRIBUTE", False, TEXT_DIM)
+        ver   = small.render(_t("menu.pre_release"), False, TEXT_DIM)
         self._draw_target.blit(ver, (12, HEIGHT - ver.get_height() - 10))
-        rights = small.render("(c) 2026 Dumitru Ceaicovschi", False, TEXT_DIM)
+        rights = small.render("(c) 2025 Dumitru Ceaicovschi", False, TEXT_DIM)
         self._draw_target.blit(rights, (WIDTH - rights.get_width() - 12,
                                    HEIGHT - rights.get_height() - 10))
 

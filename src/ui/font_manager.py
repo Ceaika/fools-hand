@@ -1,46 +1,26 @@
 """
-font_manager.py — Font loading with Cyrillic fallback for Russian.
+font_manager.py — Font loading for Fool's Hand.
 
-The game's custom font doesn't cover Cyrillic. When Russian is active we
-swap to a system font that does. Call get_fonts() to get the active font dict.
+PressStart2P covers all required characters including Cyrillic and Romanian
+diacritics, so we use it for all languages. get_fonts() is cached per language
+only so that invalidate_cache() after a language change triggers a fresh load
+(useful if sizes ever diverge per language in future).
 """
 from __future__ import annotations
 
-import os
 import pygame
+from .constants import FONT_PATH
 from .locale import get_lang
 
-# Path to the game's custom font (same as app.py uses)
-_FONT_DIR  = os.path.join(os.path.dirname(__file__), "assets", "fonts")
-_CUSTOM    = os.path.join(_FONT_DIR, "game_font.ttf")   # adjust if name differs
-
-# Sizes matching the existing font dict in app.py
 _SIZES = {
-    "title": 36,
-    "sub":   18,
+    "title": 32,
+    "sub":    8,
     "btn":   16,
-    "small": 13,
-    "body":  14,
+    "small":  8,
+    "body":   8,
 }
 
 _cache: dict[str, dict] = {}
-
-
-def _find_cyrillic_font() -> str | None:
-    """Return a system font path that supports Cyrillic, or None."""
-    candidates = [
-        "dejavusans",
-        "freesans",
-        "liberationsans",
-        "arial",
-        "segoeui",
-        "tahoma",
-    ]
-    for name in candidates:
-        path = pygame.font.match_font(name)
-        if path:
-            return path
-    return None
 
 
 def get_fonts() -> dict:
@@ -50,29 +30,11 @@ def get_fonts() -> dict:
         return _cache[lang]
 
     fonts = {}
-    if lang == "ru":
-        path = _find_cyrillic_font()
-        if path is None:
-            path = None   # will fall back to SysFont below
-        for key, size in _SIZES.items():
-            if path:
-                try:
-                    fonts[key] = pygame.font.Font(path, size)
-                    continue
-                except Exception:
-                    pass
-            fonts[key] = pygame.font.SysFont("sans", size)
-    else:
-        # Use the original custom font for EN and RO
-        custom_exists = os.path.exists(_CUSTOM)
-        for key, size in _SIZES.items():
-            if custom_exists:
-                try:
-                    fonts[key] = pygame.font.Font(_CUSTOM, size)
-                    continue
-                except Exception:
-                    pass
-            fonts[key] = pygame.font.SysFont("sans", size)
+    for key, size in _SIZES.items():
+        try:
+            fonts[key] = pygame.font.Font(FONT_PATH, size)
+        except Exception:
+            fonts[key] = pygame.font.Font(None, size * 2)
 
     _cache[lang] = fonts
     return fonts

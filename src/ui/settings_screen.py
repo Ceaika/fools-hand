@@ -171,7 +171,7 @@ class SettingsScreen:
     def update(self) -> None:
         self.tick += 1
         f = get_fonts()
-        self._back_btn._font = f["small"]
+        self._back_btn.font  = f["small"]
         self._back_btn.update(pygame.mouse.get_pos())
 
     def draw(self, surface: pygame.Surface | None = None) -> None:
@@ -267,7 +267,7 @@ class SettingsScreen:
             t.blit(name_s, (rect.centerx - name_s.get_width() // 2,
                              base_y + code_s.get_height() + 2))
 
-        self._back_btn._label = t_("settings.back")
+        self._back_btn.text  = t_("settings.back")
         self._back_btn.draw(t)
 
     def _draw_bg_grid(self, t, W, H) -> None:
