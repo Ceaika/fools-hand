@@ -30,6 +30,7 @@ class PlaySelectScreen:
         self.screen = screen
         self.fonts  = fonts
         self.tick   = 0
+        self.transfer_mode = False  # переводной дурак setting
 
         cx      = WIDTH // 2
         card_w  = 340
@@ -45,6 +46,12 @@ class PlaySelectScreen:
         self._sp_hover  = False
         self._tut_hover = False
 
+        # Transfer checkbox — centred directly below the singleplayer card
+        cb_y = card_y + card_h + 20
+        cb_size = 22
+        self._cb_rect  = pygame.Rect(self._sp_rect.x + 20, cb_y + (cb_size // 2 - cb_size // 2), cb_size, cb_size)
+        self._cb_hover = False
+
         self._back_btn = Button(90, 24, "< BACK", w=140, h=36, font=fonts["small"])
         self._vignette = vignette
 
@@ -56,6 +63,10 @@ class PlaySelectScreen:
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             if self._back_btn.handle_event(event):
                 return "back", self._back_btn.rect.copy()
+            if self._cb_rect.collidepoint(event.pos):
+                self.transfer_mode = not self.transfer_mode
+                audio.play("menu_click")
+                return None, None
             if self._sp_rect.collidepoint(event.pos):
                 audio.play("menu_click")
                 return "singleplayer", self._sp_rect.copy()
@@ -73,6 +84,7 @@ class PlaySelectScreen:
         mouse = pygame.mouse.get_pos()
         self._sp_hover  = self._sp_rect.collidepoint(mouse)
         self._tut_hover = self._tut_rect.collidepoint(mouse)
+        self._cb_hover  = self._cb_rect.inflate(20, 20).collidepoint(mouse)
         f = get_fonts()
         self._back_btn.font = f["small"]
         self._back_btn.text = _t("play_select.back")
@@ -87,11 +99,51 @@ class PlaySelectScreen:
         self._draw_header(target, f)
         self._draw_sp_card(target, f)
         self._draw_mp_card(target, f)
+        self._draw_transfer_checkbox(target, f)
         self._back_btn.font = f["small"]
         self._back_btn.text = _t("play_select.back")
         self._back_btn.draw(target)
 
-    # ── cards ─────────────────────────────────────────────────────────────────
+    def _draw_transfer_checkbox(self, target: pygame.Surface, f: dict) -> None:
+        r       = self._cb_rect
+        hover   = self._cb_hover
+        checked = self.transfer_mode
+        sp      = self._sp_rect   # align to singleplayer card
+
+        # Box shadow
+        sh = pygame.Surface((r.w + 4, r.h + 4), pygame.SRCALPHA)
+        pygame.draw.rect(sh, (0, 0, 0, 60), sh.get_rect(), border_radius=4)
+        target.blit(sh, (r.x - 1, r.y + 2))
+
+        # Box fill + border
+        box_col  = (50, 22, 90) if checked else (25, 12, 45)
+        bord_col = NEON if checked else (NEON_GLOW if hover else PURPLE)
+        pygame.draw.rect(target, box_col, r, border_radius=4)
+        pygame.draw.rect(target, bord_col, r, width=2, border_radius=4)
+
+        # Glow when checked
+        if checked:
+            gs = pygame.Surface((r.w + 12, r.h + 12), pygame.SRCALPHA)
+            pygame.draw.rect(gs, (*NEON, 30), gs.get_rect(), border_radius=7)
+            target.blit(gs, (r.x - 6, r.y - 6))
+            # Checkmark
+            mx, my = r.centerx, r.centery
+            pygame.draw.line(target, NEON_GLOW, (r.x + 4, my), (mx - 1, r.bottom - 5), 3)
+            pygame.draw.line(target, NEON_GLOW, (mx - 1, r.bottom - 5), (r.right - 4, r.y + 4), 3)
+
+        # Main label — use btn font for readability
+        lbl_col = NEON_GLOW if checked else (TEXT_MAIN if hover else TEXT_DIM)
+        lbl     = f["btn"].render(_t("play_select.transfer_mode"), False, lbl_col)
+        lbl_x   = r.right + 14
+        lbl_y   = r.centery - lbl.get_height() // 2
+        target.blit(lbl, (lbl_x, lbl_y))
+
+        # Sub-label — small font
+        sub_col = (160, 100, 200) if checked else TEXT_DIM
+        sub     = f["small"].render(_t("play_select.transfer_sub"), False, sub_col)
+        target.blit(sub, (lbl_x, lbl_y + lbl.get_height() + 5))
+
+
 
     def _draw_sp_card(self, target: pygame.Surface, f: dict) -> None:
         r     = self._sp_rect

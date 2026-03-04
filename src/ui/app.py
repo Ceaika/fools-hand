@@ -132,7 +132,7 @@ def run() -> None:
         card_sweep.start(on_switch=_on_switch)
 
     while True:
-        clock.tick(FPS)
+        dt = clock.tick(FPS) / 1000.0   # seconds since last frame
 
         if pending and not transition.busy:
             current = pending
@@ -182,7 +182,8 @@ def run() -> None:
                         from ..core.game import Game
                         game_obj = Game()
                         game_obj.setup_no_deal(num_players=2)
-                        game_screen = GameScreen(screen, fonts, game_obj)
+                        game_screen = GameScreen(screen, fonts, game_obj,
+                                                 transfer_mode=play_select.transfer_mode)
                         screens["game"] = game_screen
                         play_select.draw(card_sweep.get_surface_src())
                         game_screen.draw(card_sweep.get_surface_dst())
@@ -244,7 +245,7 @@ def run() -> None:
 
         if not transition.busy and not card_sweep.busy:
             if current == "game":
-                game_screen.update()
+                game_screen.update(dt)
             elif current == "pause":
                 pause.update()
             elif current in ("settings", "game_settings"):
